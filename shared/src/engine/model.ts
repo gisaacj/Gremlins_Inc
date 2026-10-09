@@ -103,6 +103,17 @@ export interface EnginePlayer {
   colorIndex: number;
   /** 本回合是否已触发过某项每回合一次的被动 */
   flags: Record<string, number>;
+
+  // ---- 玩家交锋统计 ----
+  // 字段名对应原版 `GPlayer` 的 ConflictTotal / ConflictInit / ConflictWon / ConflictPaid
+  /** 参与过的交锋总次数 */
+  conflictTotal: number;
+  /** 由自己落地引发的交锋次数 */
+  conflictInit: number;
+  /** 赢下的交锋次数 */
+  conflictWon: number;
+  /** 在交锋中付出的金钱总额 */
+  conflictPaid: number;
 }
 
 // ---------------------------------------------------------------- 待决策
@@ -183,6 +194,14 @@ export interface EngineState {
   };
   /** 最近一次掷骰结果 */
   lastRoll?: number;
+  /**
+   * 多阶段挂起的暂存（拍卖出价、交锋出价等需要"收齐各方输入"的场景）。
+   *
+   * 每次 `PendingChoice` 挂起时 `resume.scratch` 会快照 `ActionContext.scratch`，
+   * 但那些输入不属于动作序列本身，放在这里更直接。
+   * 键形如 `conflict:<a>:<b>:<playerId>`。
+   */
+  pendingInput?: Record<string, string>;
 
   mapId: string;
   /** 本局启用的混沌/暴乱卡 */

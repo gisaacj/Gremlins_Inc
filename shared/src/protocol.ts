@@ -141,6 +141,20 @@ export interface SerializedPlayer {
   colorIndex: number;
   activeAbilityUsed: number;
   isCurrentTurn: boolean;
+  /**
+   * 玩家交锋统计（对应原版 `GPlayer` 的
+   * `ConflictTotal / ConflictInit / ConflictWon / ConflictPaid`）。
+   */
+  conflicts: {
+    /** 参与过的交锋总数 */
+    total: number;
+    /** 由自己落地引发的交锋数 */
+    init: number;
+    /** 赢下的交锋数 */
+    won: number;
+    /** 在交锋中付出的金钱总额 */
+    paid: number;
+  };
 }
 
 /**

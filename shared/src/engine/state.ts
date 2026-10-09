@@ -90,6 +90,10 @@ function buildPlayer(
     cardsPlayedThisTurn: 0,
     colorIndex: index,
     flags: {},
+    conflictTotal: 0,
+    conflictInit: 0,
+    conflictWon: 0,
+    conflictPaid: 0,
   };
 }
 
@@ -468,6 +472,13 @@ export function resolvePending(
     return resolveMoveBranch(state, playerId, answer[0]);
   }
 
+  // 玩家交锋：两方逐个出价，收齐后结算（不走动作解释器）
+  if (pending.kind.startsWith('conflict:')) {
+    state.pending = undefined;
+    const r = resolveConflictBid(state, pending.kind, playerId, Number(answer[0]) || 0);
+    return r.pending ? { ok: true, pending: r.pending } : { ok: r.ok };
+  }
+
   const ctx: ActionContext = {
     actions: pending.resume.actions,
     index: pending.resume.index,
@@ -655,6 +666,164 @@ function resolveLanding(state: EngineState, p: EnginePlayer): void {
 
   // 角色落地被动
   triggerCharVisitAbility(state, p, cell);
+
+  // 玩家交锋：两位玩家停留在同一站点时引发（**建筑除外**，建筑可容纳任意人数）。
+  // 原版文案：「当两位玩家停留在同一站点时，就会引发玩家交锋（建筑除外）」。
+  if (!cellType.building) {
+    const rival = state.players.find((x) => x.id !== p.id && x.cellId === cell.id);
+    if (rival) startConflict(state, p, rival);
+  }
+}
+
+// ---------------------------------------------------------------- 玩家交锋
+/**
+ * 玩家交锋（Player Conflict）——**本质是一次两方拍卖**。
+ *
+ * 原版规则（来自游戏内说明与 DLL 的 `ComConflictWindow` 协议字段）：
+ *  - 触发：两位玩家停留在同一**非建筑**站点
+ *  - 结算：每位玩家出价（`ComConflictWindow.MaxResultValue` 是出价上限，
+ *    `Answer.Result` 回传出价）→ **出价最高者付款并留在该站点，另一位被逮捕**
+ *  - 平局：`^`（罪恶）最少者获胜
+ *  - 统计：`ConflictTotal / ConflictInit / ConflictWon / ConflictPaid`
+ *
+ * 挂起后用 `PendingChoice(kind='conflict:<challengerId>:<defenderId>')` 逐个收价。
+ */
+export function startConflict(state: EngineState, challenger: EnginePlayer, defender: EnginePlayer): void {
+  const kind = `conflict:${challenger.id}:${defender.id}`;
+  pushLog(state, challenger.id,
+    `玩家交锋！${challenger.name} vs ${defender.name} —— 每位玩家出价，出价最高者留下，另一位被逮捕`);
+  state.pending = {
+    kind,
+    playerId: challenger.id,
+    prompt: `玩家交锋：与 ${defender.name} 竞价（出价上限 ${challenger.res.money}）`,
+    options: bidOptions(challenger.res.money),
+    min: 1,
+    max: 1,
+    resume: {
+      actions: [],
+      index: 0,
+      targets: [challenger.id, defender.id],
+      source: '玩家交锋',
+      ownerId: challenger.id,
+      scratch: { conflictChallenger: challenger.id, conflictDefender: defender.id },
+    },
+  };
+}
+
+/**
+ * 出价选项。
+ *
+ * 原版是**数值输入**（`MaxResultValue` 为上限），这里用几档常见金额 + 全押，
+ * 上限为出价者的金钱；引擎按数值结算，因此调用方也可以直接传任意金额。
+ */
+function bidOptions(max: number): Array<{ value: string; label: string }> {
+  const opts: Array<{ value: string; label: string }> = [{ value: '0', label: '不出价（0）' }];
+  for (const v of [10, 20, 30, 50, 75, 100, 150, 200]) {
+    if (v <= max) opts.push({ value: String(v), label: `出价 ${v} 金钱` });
+  }
+  if (max > 0 && !opts.some((o) => Number(o.value) === max)) {
+    opts.push({ value: String(max), label: `出价 ${max} 金钱（全押）` });
+  }
+  return opts;
+}
+
+/**
+ * 收齐双方出价并结算交锋。
+ *
+ * @returns 结算结果（给 `resolvePending` 用）
+ */
+export function resolveConflictBid(
+  state: EngineState,
+  pendingKind: string,
+  playerId: string,
+  bid: number,
+): { ok: boolean; pending?: PendingChoice } {
+  const parts = pendingKind.split(':');
+  const challenger = getPlayer(state, parts[1]);
+  const defender = getPlayer(state, parts[2]);
+  if (!challenger || !defender) return { ok: false };
+
+  const key = pendingKind;
+  state.pendingInput ??= {};
+  const store = state.pendingInput;
+  store[`${key}:${playerId}`] = String(Math.max(0, Math.floor(bid)));
+
+  // 还差一方 → 问另一位
+  const other = playerId === challenger.id ? defender : challenger;
+  if (!store[`${key}:${other.id}`]) {
+    state.pending = {
+      kind: pendingKind,
+      playerId: other.id,
+      prompt: `玩家交锋：与 ${playerId === challenger.id ? challenger.name : defender.name} 竞价（出价上限 ${other.res.money}）`,
+      options: bidOptions(other.res.money),
+      min: 1,
+      max: 1,
+      resume: {
+        actions: [],
+        index: 0,
+        targets: [challenger.id, defender.id],
+        source: '玩家交锋',
+        ownerId: challenger.id,
+        scratch: { conflictChallenger: challenger.id, conflictDefender: defender.id },
+      },
+    };
+    return { ok: true, pending: state.pending };
+  }
+
+  // 双方出价齐了 → 结算
+  const bidA = Number(store[`${key}:${challenger.id}`] ?? 0);
+  const bidB = Number(store[`${key}:${defender.id}`] ?? 0);
+  settleConflict(state, challenger, defender, bidA, bidB, playerId === challenger.id ? defender.id : challenger.id);
+  delete store[`${key}:${challenger.id}`];
+  delete store[`${key}:${defender.id}`];
+  return { ok: true };
+}
+
+/** 结算：高者付款留下，低者被逮捕；平局比罪恶（少者胜）。 */
+function settleConflict(
+  state: EngineState,
+  challenger: EnginePlayer,
+  defender: EnginePlayer,
+  bidA: number,
+  bidB: number,
+  lastBidderId: string,
+): void {
+  // 平局：罪恶最少者获胜
+  let winner: EnginePlayer;
+  let loser: EnginePlayer;
+  let winningBid: number;
+  if (bidA === bidB) {
+    winner = challenger.res.malice <= defender.res.malice ? challenger : defender;
+    loser = winner.id === challenger.id ? defender : challenger;
+    winningBid = bidA;
+    pushLog(state, winner.id,
+      `交锋平局（各出价 ${bidA}）→ ${winner.name} 罪恶较少（${winner.res.malice} vs ${loser.res.malice}），获胜`);
+  } else if (bidA > bidB) {
+    winner = challenger; loser = defender; winningBid = bidA;
+  } else {
+    winner = defender; loser = challenger; winningBid = bidB;
+  }
+
+  // 赢家付掉自己的出价（钱给银行，不是给对手）
+  const paid = Math.min(winner.res.money, winningBid);
+  if (paid > 0) addRes(winner, 'money', -paid);
+
+  // 统计
+  for (const p of [challenger, defender]) p.conflictTotal += 1;
+  challenger.conflictInit += 1; // 由挑战者落地引发
+  winner.conflictWon += 1;
+  winner.conflictPaid += paid;
+
+  pushLog(state, winner.id,
+    `${winner.name} 以 ${paid} 金钱赢下交锋，留在原地；${loser.name} 被逮捕`);
+
+  // 永久卡钩子：参与的持卡者 +N；输家的持卡者效果
+  fireTrigger(state, 'playerConflict', { actorId: winner.id });
+  fireTrigger(state, 'loseConflict', { actorId: loser.id });
+
+  arrest(state, loser, `玩家交锋输给 ${winner.name}`);
+
+  void lastBidderId;
 }
 
 function drawMisfortuneFor(state: EngineState, p: EnginePlayer): void {

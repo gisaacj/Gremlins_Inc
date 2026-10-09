@@ -208,7 +208,28 @@ m020  BUTTON ["-$150","Money","150"]   BUTTON ["-*2"]
 三个调用点传入，并随 `PendingChoice.resume` 一起快照），
 `handleAuction` 用它回查卡牌 params。**不要**从 `action.params` 里找。
 
-**14. 岔路口必须由玩家选路**
+**14. 玩家交锋（Player Conflict）是一次两方拍卖**
+
+两位玩家停在**同一非建筑站**时触发（建筑可容纳任意人数）：
+
+> 每位玩家出价。出价最高的玩家付款并留在该站点，另一位玩家被逮捕。
+> 如果出价相等，则 `^` 最少的玩家获胜。
+
+- 挂起 kind 为 `conflict:<challengerId>:<defenderId>`，逐个收价，
+  `state.pendingInput` 暂存双方出价（**不**放在 `ctx.scratch`，
+  因为这些输入不属于动作序列）
+- 结算在 `settleConflict()`：赢家付自己的出价（钱给银行，不是给对手），
+  输家 `arrest()`
+- 统计字段 `conflictTotal / conflictInit / conflictWon / conflictPaid`
+  对应原版 `GPlayer` 的 `ConflictTotal / ConflictInit / ConflictWon / ConflictPaid`
+  （字段名是从 DLL 里挖出来的），并通过协议 `player.conflicts` 暴露给客户端
+- 触发 `playerConflict` / `loseConflict` 两个永久卡钩子
+
+**出价是数值输入，不是固定档位**：DLL 的 `ComConflictWindow` 协议里有
+`MaxResultValue`（最大可出价）与 `Answer.Result`（回传的数值）。
+所以 `bidOptions()` 按"持有金钱"生成档位（含"全押"），引擎按数值结算。
+
+**15. 岔路口必须由玩家选路**
 
 真实地图**不是单环，而是分支图**。普通地图 67 格的出度分布：
 

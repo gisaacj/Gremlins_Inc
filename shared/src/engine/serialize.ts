@@ -80,6 +80,13 @@ export function serializeEnginePlayer(
     colorIndex: p.colorIndex,
     activeAbilityUsed: p.flags['activeUsed'] ?? 0,
     isCurrentTurn: state.players[state.currentIndex]?.id === p.id,
+    // 玩家交锋统计（对应原版 GPlayer 的 ConflictTotal / Init / Won / Paid）
+    conflicts: {
+      total: p.conflictTotal ?? 0,
+      init: p.conflictInit ?? 0,
+      won: p.conflictWon ?? 0,
+      paid: p.conflictPaid ?? 0,
+    },
   };
 }
 

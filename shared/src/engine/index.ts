@@ -28,3 +28,5 @@ export * from './serialize.js';
 export * from './api.js';
 export * from './ai.js';
 export * from './local.js';
+// 「中心厄运站点」等棋盘语义辅助（引擎侧用到，也便于测试直接取）
+export { centralMisfortuneId } from '../board-view.js';

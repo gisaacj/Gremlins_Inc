@@ -32,6 +32,8 @@ export type AbilityEvent =
   | 'skipMove'
   /** 被捕时 */
   | 'arrest'
+  /** 玩家交锋开始前（引发方决定是否逃避） */
+  | 'beforeConflict'
   /** 用卡移动后（携带步数） */
   | 'afterMove'
   /** 打出卡牌后（携带是否秘密卡/罪恶卡/是否给罪恶） */
@@ -98,6 +100,7 @@ export interface AbilitySpec {
     | 'insuranceDiscount'      // 冒险格保险费用 N
     | 'excavation'             // 收入格二选一（双倍收入 / 抽 6 张）
     | 'sellIncome'             // 冒险格可卖 N 收入换钱
+    | 'escapeConflict'         // 交锋前可付 N% 的钱逃到中心厄运站
     | 'none';                  // 仅登记，未实现机械效果
 }
 
@@ -271,9 +274,10 @@ export const CHARACTER_ABILITIES: Record<string, AbilitySpec[]> = {
       rule: 'When playing a secret card: +$100', nums: [100], flag: 'secretAgentSecrets',
     },
     {
-      action: 'SecretAgent_Shaking_The_Tail', event: 'afterMove', label: '摇尾巴',
-      rule: 'To avoid a Conflict: pay 50% of $ and move to the central Misfortune spot',
-      nums: [50], flag: 'none',
+      action: 'SecretAgent_Shaking_The_Tail', event: 'beforeConflict', label: '摇尾巴',
+      rule: 'To avoid a Conflict: lose 50% of your $ and teleport to the central Misfortune spot '
+        + '(unless another player is already there). Only when it is your turn.',
+      nums: [50], flag: 'escapeConflict',
     },
     {
       action: 'SecretAgent_Secret_Connections', event: 'arrest', label: '秘密关系',
@@ -653,6 +657,16 @@ function applyAbility(
     case 'secretAgentConnections':
       if (ctx.flags) ctx.flags.arrestAsSix = true;
       return true;
+
+    // 「摇尾巴」：交锋开始前，引发方可选择付钱逃到中心厄运站。
+    // 只提供"可选项"信息，真正执行由 state.ts 的 startConflict 读取。
+    case 'escapeConflict': {
+      const pct = n(0, 50);
+      if (ctx.flags) {
+        ctx.flags.escapeConflictPct = pct;
+      }
+      return true;
+    }
 
     case 'gamblerExtraTurn': {
       const cell = getCell(state, ctx.cellId ?? p.cellId);

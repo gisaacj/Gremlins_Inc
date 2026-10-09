@@ -260,6 +260,32 @@ export function cardMoveSteps(cardId: string): number {
 }
 
 /**
+ * 「中心厄运站点」的格 id。
+ *
+ * 用于「特务·摇尾巴」：为避免玩家交锋，支付 {1}% 的 $ 并移动到中心厄运站点
+ * （英文原文 "teleport to the central Misfortune spot"）。
+ *
+ * 原版地图里所谓"中心"没有显式标记，但两张图上恰好都有一个**连接度最高的
+ * 厄运格**——Normal 是 2/2（其余 1/1），Colony 是 2/3（其余 1/1）。
+ * 这就是数据驱动的判据，不用写死格号。
+ *
+ * @returns 格 id；地图上没有厄运格时返回 undefined
+ */
+export function centralMisfortuneId(map: BoardMap): string | undefined {
+  const ms = map.cells.filter((c) => c.cellType === 'Misfortune');
+  if (!ms.length) return undefined;
+  // 连接度（出入度之和）最高者；并列时取 num 较大者（更靠地图后段）
+  return ms
+    .slice()
+    .sort((a, b) => {
+      const da = a.out.length + a.in.length;
+      const db = b.out.length + b.in.length;
+      if (db !== da) return db - da;
+      return (b.num ?? 0) - (a.num ?? 0);
+    })[0].id;
+}
+
+/**
  * 这张牌是否用于反向移动。
  * 判定依据是动作序列里含 `Move_Back`（如「装腔作势」），
  * 不用卡名做字符串匹配。

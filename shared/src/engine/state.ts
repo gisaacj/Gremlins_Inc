@@ -23,6 +23,7 @@ import {
 } from './permanents.js';
 import { bribeModifier, fireAbility } from './abilities.js';
 import { availableOptions } from './options.js';
+import { centralMisfortuneId } from '../board-view.js';
 
 export interface EngineInitArgs {
   roomId: string;
@@ -475,6 +476,21 @@ export function resolvePending(
   // 玩家交锋：两方逐个出价，收齐后结算（不走动作解释器）
   if (pending.kind.startsWith('conflict:')) {
     state.pending = undefined;
+    const parts = pending.kind.split(':');
+    const challenger = getPlayer(state, parts[1]);
+    const defender = getPlayer(state, parts[2]);
+    if (!challenger || !defender) return { ok: false, reason: '交锋双方不存在' };
+
+    // 前置：「摇尾巴」逃避选择
+    if (parts[3] === 'escape') {
+      if ((answer[0] ?? '').toLowerCase().startsWith('escape')) {
+        applyConflictEscape(state, challenger, defender);
+        return { ok: true };
+      }
+      enterConflictBidding(state, challenger, defender);
+      return { ok: true, pending: state.pending };
+    }
+
     const r = resolveConflictBid(state, pending.kind, playerId, Number(answer[0]) || 0);
     return r.pending ? { ok: true, pending: r.pending } : { ok: r.ok };
   }
@@ -690,6 +706,70 @@ function resolveLanding(state: EngineState, p: EnginePlayer): void {
  */
 export function startConflict(state: EngineState, challenger: EnginePlayer, defender: EnginePlayer): void {
   const kind = `conflict:${challenger.id}:${defender.id}`;
+
+  // 「特务·摇尾巴」：引发方可选择付 {1}% 的钱逃到中心厄运站，从而避免交锋。
+  // 原文限制：「如当前并非轮到你走牌，则此站点规则对你无效」——所以只有
+  // 引发交锋的一方（轮到自己走牌的人）能用；且目标格必须没人。
+  const esc = escapeOption(state, challenger);
+  if (esc) {
+    pushLog(state, challenger.id,
+      `玩家交锋在即（${challenger.name} vs ${defender.name}）——可选择「摇尾巴」逃避`);
+    state.pending = {
+      kind: `${kind}:escape`,
+      playerId: challenger.id,
+      prompt: `玩家交锋！是否付 ${esc.cost} 金钱（${esc.pct}% 的钱）逃到中心厄运站？`,
+      options: [
+        { value: 'fight', label: '应战（进入出价）' },
+        { value: 'escape', label: `逃避：付 ${esc.cost} 金钱并传送到厄运站` },
+      ],
+      min: 1,
+      max: 1,
+      resume: {
+        actions: [],
+        index: 0,
+        targets: [challenger.id, defender.id],
+        source: '玩家交锋',
+        ownerId: challenger.id,
+        scratch: { conflictChallenger: challenger.id, conflictDefender: defender.id },
+      },
+    };
+    return;
+  }
+
+  enterConflictBidding(state, challenger, defender);
+}
+
+/**
+ * 是否可用「摇尾巴」逃避交锋。
+ *
+ * @returns 需付金额与百分比；不可用时返回 undefined
+ */
+function escapeOption(
+  state: EngineState,
+  challenger: EnginePlayer,
+): { cost: number; pct: number; destId: string } | undefined {
+  if (challenger.res.money <= 0) return undefined;
+  const flags: Record<string, string | number | boolean> = {};
+  const fired = fireAbility(state, challenger.id, 'beforeConflict', { flags });
+  if (!fired || typeof flags.escapeConflictPct !== 'number') return undefined;
+
+  const dest = centralMisfortuneId(getMap(state));
+  if (!dest) return undefined;
+  // 「除非该站点已被占据」
+  if (state.players.some((p) => p.id !== challenger.id && p.cellId === dest)) return undefined;
+
+  const pct = flags.escapeConflictPct;
+  const cost = Math.floor((challenger.res.money * pct) / 100);
+  return { cost, pct, destId: dest };
+}
+
+/** 进入出价阶段（先问挑战者） */
+function enterConflictBidding(
+  state: EngineState,
+  challenger: EnginePlayer,
+  defender: EnginePlayer,
+): void {
+  const kind = `conflict:${challenger.id}:${defender.id}`;
   pushLog(state, challenger.id,
     `玩家交锋！${challenger.name} vs ${defender.name} —— 每位玩家出价，出价最高者留下，另一位被逮捕`);
   state.pending = {
@@ -708,6 +788,28 @@ export function startConflict(state: EngineState, challenger: EnginePlayer, defe
       scratch: { conflictChallenger: challenger.id, conflictDefender: defender.id },
     },
   };
+}
+
+/**
+ * 处理「摇尾巴」的选择。
+ *
+ * @returns 是否已逃避（true 表示交锋取消）
+ */
+export function applyConflictEscape(
+  state: EngineState,
+  challenger: EnginePlayer,
+  defender: EnginePlayer,
+): boolean {
+  const esc = escapeOption(state, challenger);
+  const dest = esc?.destId ?? centralMisfortuneId(getMap(state));
+  const pct = esc?.pct ?? 50;
+  const cost = esc?.cost ?? Math.floor((challenger.res.money * pct) / 100);
+
+  addRes(challenger, 'money', -cost);
+  if (dest) challenger.cellId = dest;
+  pushLog(state, challenger.id,
+    `「摇尾巴」：付 ${cost} 金钱（${pct}%），传送到中心厄运站，避开与 ${defender.name} 的交锋`);
+  return true;
 }
 
 /**

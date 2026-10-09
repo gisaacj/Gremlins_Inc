@@ -195,7 +195,20 @@ m020  BUTTON ["-$150","Money","150"]   BUTTON ["-*2"]
 另外 `drawMisfortune` 必须**接收** `runActions` 的返回值并写回 `state.pending`，
 否则厄运牌里的决策会被静默跳过。
 
-**13. 岔路口必须由玩家选路**
+**13. 有些原语要读「卡牌自身」的 params，动作参数是空的**
+
+`Auction` 的 `ActionParams` 是 `[""]`，但两种形态完全不同：
+
+| 卡 | 说明 | **卡牌** params | 结算 |
+|---|---|---|---|
+| a061 拍卖 | 最高者付价并 +出价额 齿轮 | `[3]` | 只最高者付钱 |
+| m031 总统造访 | 所有出价都付，最低者 -出价额 齿轮 | `[2]` | 全员付钱 |
+
+所以 `ActionContext` 带上了 `sourceCardId`（由 `state.ts` / `interp.ts` 的
+三个调用点传入，并随 `PendingChoice.resume` 一起快照），
+`handleAuction` 用它回查卡牌 params。**不要**从 `action.params` 里找。
+
+**14. 岔路口必须由玩家选路**
 
 真实地图**不是单环，而是分支图**。普通地图 67 格的出度分布：
 

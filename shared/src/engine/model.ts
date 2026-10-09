@@ -116,6 +116,11 @@ export interface ResumeState {
   targets: string[];
   /** 触发来源描述（用于日志） */
   source: string;
+  /**
+   * 动作序列所属卡牌的 id（若来自某张牌）。
+   * 供需要读**卡牌自身 params** 的原语使用（如 `Auction` 判别形态）。
+   */
+  sourceCardId?: string;
   /** 持有该效果的主玩家 */
   ownerId: string;
   /** 中途产生的附加数据（选定的地点、卡牌等），必须随挂起一起保存 */

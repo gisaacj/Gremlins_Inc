@@ -404,6 +404,7 @@ export function playEffectCard(
     targets: [p.id],
     ownerId: p.id,
     source: `卡牌「${card.text.name}」`,
+    sourceCardId: cardId,
     choices,
     scratch: { sourceCardId: cardId },
   };
@@ -473,6 +474,7 @@ export function resolvePending(
     targets: pending.resume.targets,
     ownerId: pending.resume.ownerId,
     source: pending.resume.source,
+    sourceCardId: pending.resume.sourceCardId,
     // 关键：把玩家的回答交给解释器，否则后续动作会退回"默认作用于自己"
     choices: { [pending.kind]: answer },
     scratch: pending.resume.scratch ? { ...pending.resume.scratch } : undefined,
@@ -709,6 +711,7 @@ export function takeJailTurn(state: EngineState, playerId: string): { ok: boolea
       targets: [p.id],
       ownerId: p.id,
       source: `监狱卡「${card.text.name}」`,
+      sourceCardId: card.id,
     });
     if (r.status === 'pending') {
       state.pending = r.pending;

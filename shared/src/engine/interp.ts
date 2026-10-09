@@ -18,9 +18,9 @@ import {
 import { fireTrigger as firePermTrigger } from './permanents.js';
 import { fireAbility } from './abilities.js';
 import { collectButtons } from './dialog.js';
-import { jailTermFor } from './options.js';
+import { diceTableOf, jailTermFor } from './options.js';
 import {
-  addRes, firstId, firstNumber, hasTag, parseParams, payAmount, transferRes,
+  addRes, firstId, firstNumber, firstResource, hasTag, parseParams, payAmount, transferRes,
   type ParamSlot,
 } from './resources.js';
 
@@ -38,6 +38,14 @@ export interface ActionContext {
   ownerId: string;
   /** 触发来源描述，用于日志 */
   source: string;
+  /**
+   * 动作序列所属的卡牌 id（若来自某张牌）。
+   *
+   * 有些原语需要读**卡牌自身**的 `params` 才能确定规则形态
+   * （如 `Auction`：a061 是"最高者付价"，m031 是"全员付价、最低者受罚"），
+   * 而动作自己的 `ActionParams` 是空的（`[""]`）。
+   */
+  sourceCardId?: string;
   /** 调用方预先给出的选择结果（resume 或 AI 决策） */
   choices?: Record<string, string[]>;
   /** 额外数据槽（选定的地点、卡牌等） */
@@ -55,6 +63,7 @@ export function resumeFrom(pending: PendingChoice): ActionContext {
     targets: pending.resume.targets,
     ownerId: pending.resume.ownerId,
     source: pending.resume.source,
+    sourceCardId: pending.resume.sourceCardId,
   };
 }
 
@@ -114,10 +123,44 @@ function makePending(
         // 若存引用会把"挂起那一刻的目标"覆盖掉。
         targets: [...ctx.targets],
         source: ctx.source,
+        sourceCardId: ctx.sourceCardId,
         ownerId: ctx.ownerId,
         scratch: ctx.scratch ? { ...ctx.scratch } : undefined,
       },
       ...extra,
+    },
+  };
+}
+
+/**
+ * 像 `makePending` 一样挂起，但可以指定**由谁来答**。
+ * `Auction` 要轮流问每个玩家，不能固定用 ctx.ownerId。
+ */
+function makePendingFor(
+  ctx: ActionContext,
+  kind: string,
+  playerId: string,
+  prompt: string,
+  options: Array<{ value: string; label: string }>,
+): RunResult {
+  return {
+    status: 'pending',
+    pending: {
+      kind,
+      playerId,
+      prompt,
+      options,
+      min: 1,
+      max: 1,
+      resume: {
+        actions: ctx.actions,
+        index: ctx.index,
+        targets: [...ctx.targets],
+        source: ctx.source,
+        sourceCardId: ctx.sourceCardId,
+        ownerId: ctx.ownerId,
+        scratch: ctx.scratch ? { ...ctx.scratch } : undefined,
+      },
     },
   };
 }
@@ -243,6 +286,7 @@ export function drawMisfortune(state: EngineState, p: EnginePlayer): void {
       targets: [p.id],
       ownerId: p.id,
       source: `厄运「${card.text.name}」`,
+      sourceCardId: card.id,
     });
     // 厄运牌里也会有需要玩家决策的动作（`BUTTON` 二选一、`SelectOpponent` 选人…）。
     // 之前这里丢掉了返回值，挂起状态没写回 state.pending，
@@ -378,6 +422,90 @@ function execAction(
       const times = firstNumber(slots, 1) || 1;
       const gained = addRes(o, 'money', o.res.income * times);
       log(state, o.id, `${ctx.source}：获得收入 ×${times} → +${gained} ${RES_LABEL.money}`);
+      return undefined;
+    }
+
+    // ============ 拍卖（每个玩家出价） ============
+    // a061「拍卖」：             最高者付价，+出价额 齿轮
+    // m031「总统造访」：         所有人都付价，最低者 -出价额 齿轮
+    // 用 params 区分两种形态（规则写在卡牌说明里，参数只够做形态判别）。
+    case 'Auction':
+      return handleAuction(state, ctx, action.params ?? []);
+
+    // ============ 比较资源（不满足则跳过后续动作） ============
+    // a134「伪证」：...该玩家给你{1}*；**若其罪恶高于你，则被逮捕**。
+    // 英文原文: "...; if their ^ is higher than yours, they are arrested."
+    // 所以 `CompareResource(malice)` 之后的 `OpponentArrest` 只在
+    // "目标该资源 > 自己"时执行；否则跳过后续动作。
+    case 'CompareResource': {
+      const key = (firstResource(slots) ?? 'malice') as ResourceKey;
+      const me = owner(state, ctx);
+      const targets = targetPlayers(state, ctx);
+      const pass = targets.length > 0 && targets.every((t) => t.res[key] > me.res[key]);
+      if (!pass) {
+        // 条件不成立 → 跳过后续动作
+        ctx.index = ctx.actions.length;
+        log(state, me.id, `比较 ${RES_LABEL[key]} 未满足，跳过后续效果`);
+      }
+      return undefined;
+    }
+
+    // ============ 最高属性奖励 ============
+    // a181「知名品牌」：每当你拥有最高的 $、*、&、^、| 或 ~ 之一：
+    //   +{1}* 以及 |+{2}   （params = [1, 3]）
+    // 英文原文: "For each occasion where you have the highest $, *, &, ^, | or ~:
+    //            +{1}*, |+{2}."
+    case 'TopStatBonus': {
+      const me = owner(state, ctx);
+      // 对应原文的 $ * & ^ | ~ 六项
+      const keys: ResourceKey[] = ['money', 'score', 'vote', 'malice', 'income', 'term'];
+      let count = 0;
+      for (const k of keys) {
+        const max = Math.max(...state.players.map((p) => p.res[k]));
+        if (max > 0 && me.res[k] === max) count++;
+      }
+      const perScore = firstNumber(slots, 0);
+      const perIncome = Number(action.params?.[1] ?? 0);
+      if (count > 0) {
+        if (perScore) addRes(me, 'score', perScore * count);
+        if (perIncome) addRes(me, 'income', perIncome * count);
+        log(state, me.id,
+          `「知名品牌」：${count} 项资源最高 → +${perScore * count} ${RES_LABEL.score}，+${perIncome * count} ${RES_LABEL.income}`);
+      } else {
+        log(state, me.id, '「知名品牌」：没有任何一项资源最高，无奖励');
+      }
+      return undefined;
+    }
+
+    // ============ 赌场重掷 / 摇骰器 ============
+    // a030「幸运币」（Yet another chance）：在赌场中赌博 —— 用赌场骰表结算一次
+    case 'CasinoReroll': {
+      const me = owner(state, ctx);
+      const table = diceTableOf('Casino');
+      const dice = rollDice(state);
+      state.lastRoll = dice;
+      const outcome = table[dice];
+      if (outcome?.gain) {
+        for (const [k, v] of Object.entries(outcome.gain)) {
+          if (!v) continue;
+          addRes(me, k as ResourceKey, v);
+        }
+      }
+      log(state, me.id, `「幸运币」赌场掷出 ${dice}：${dice <= 3 ? '输' : '赢'}（${JSON.stringify(outcome?.gain ?? {})}）`);
+      return undefined;
+    }
+
+    // a170「摇骰器」（Dice-roller）：掷骰子，每有一张移动点数与骰点相同的手牌 +{1}$
+    case 'SameMovePoints': {
+      const me = owner(state, ctx);
+      const per = firstNumber(slots, 0);
+      const dice = rollDice(state);
+      state.lastRoll = dice;
+      const hits = me.hand.filter((id) => CARD_BY_ID[id]?.move === dice);
+      const gain = hits.length * per;
+      if (gain) addRes(me, 'money', gain);
+      log(state, me.id,
+        `「摇骰器」掷出 ${dice}：${hits.length} 张同点数手牌 → +${gain} ${RES_LABEL.money}`);
       return undefined;
     }
 
@@ -679,6 +807,108 @@ function applyChoice(
       ctx.scratch = { ...ctx.scratch, [kind]: values[0] };
       break;
   }
+}
+
+// ---------------------------------------------------------------- 拍卖
+/**
+ * 取"动作序列所属卡牌"的 `params`。
+ *
+ * 有些原语的规则形态写在**卡牌**的 params 里，而动作自己的 `ActionParams`
+ * 是空的（`[""]`）。例如 `Auction`：
+ *
+ * | 卡 | 说明 | 卡牌 params | 结算 |
+ * |---|---|---|---|
+ * | a061 拍卖 | 最高者付价并 +出价额 齿轮 | `[3]` | 只最高者付钱 |
+ * | m031 总统造访 | 所有出价都付，最低者 -出价额 齿轮 | `[2]` | 全员付钱 |
+ *
+ * 找不到就返回 undefined（调用方回退到动作参数）。
+ */
+function cardParamsOf(ctx: ActionContext): string[] | undefined {
+  const id = ctx.sourceCardId;
+  if (!id) return undefined;
+  const card = CARD_BY_ID[id] ?? MISFORTUNE_CARDS.find((c) => c.id === id);
+  if (!card) return undefined;
+  return (card.params ?? []).map(String);
+}
+
+/**
+ * 拍卖：**每个玩家各出一次价**，按顺序逐个询问。
+ *
+ * 两种形态见 `cardParamsOf` 的说明。出价逐个收集，
+ * 用 `ctx.scratch.__bids` 跨挂起保存。
+ */
+function handleAuction(state: EngineState, ctx: ActionContext, actionParams: string[]): RunResult | undefined {
+  // 形态判别用**卡牌**的 params（动作参数是空的）
+  const params = cardParamsOf(ctx) ?? actionParams;
+  const key = 'auction';
+  const bids: Record<string, number> = {};
+  const raw = ctx.scratch?.['__bids'];
+  if (raw) {
+    for (const pair of raw.split(';')) {
+      const [id, v] = pair.split('=');
+      if (id) bids[id] = Number(v) || 0;
+    }
+  }
+
+  // 消费本次提交的出价（挂起时是问某一位，resume 时把答案记进 bids）
+  const answer = takeChoice(ctx, key);
+  if (answer) {
+    const who = state.players.find((p) => !(p.id in bids));
+    if (who) bids[who.id] = Math.max(0, Number(answer[0]) || 0);
+    ctx.scratch = {
+      ...ctx.scratch,
+      __bids: Object.entries(bids).map(([id, v]) => `${id}=${v}`).join(';'),
+    };
+  }
+
+  // 还没问完 → 问下一位
+  const next = state.players.find((p) => !(p.id in bids));
+  if (next) {
+    const already = state.players.filter((p) => p.id in bids);
+    const prompt = already.length
+      ? `拍卖出价（已出价 ${already.length}/${state.players.length}）`
+      : '拍卖：请出价';
+    return makePendingFor(ctx, key, next.id, prompt, [
+      { value: '0', label: '不出价（0）' },
+      { value: '50', label: '出价 50 金钱' },
+      { value: '100', label: '出价 100 金钱' },
+      { value: '200', label: '出价 200 金钱' },
+    ]);
+  }
+
+  // 出价收齐 → 结算
+  const entries = state.players.map((p) => ({ p, bid: Math.max(0, bids[p.id] ?? 0) }));
+  // 形态判别：params [2]（→ {1}=2）是"总统造访"，其余按"拍卖"处理
+  const penaltyMode = Number(params[0] ?? 0) === 2;
+  const maxBid = Math.max(...entries.map((e) => e.bid));
+  const minBid = Math.min(...entries.map((e) => e.bid));
+
+  if (penaltyMode) {
+    // 所有出价都要付；最低出价者额外 -出价额 齿轮
+    for (const { p, bid } of entries) {
+      if (bid > 0) transferRes(p, undefined, 'money', bid);
+    }
+    const losers = entries.filter((e) => e.bid === minBid);
+    for (const { p, bid } of losers) {
+      const lost = -addRes(p, 'score', -bid);
+      log(state, p.id, `「总统造访」最低出价（${bid}）：付 ${bid} 金钱，-${lost} ${RES_LABEL.score}`);
+    }
+    if (!losers.length) log(state, ctx.ownerId, '「总统造访」：无人出价');
+  } else {
+    // 只有最高出价者付钱，并 +出价额 齿轮（并列时都算）
+    const winners = entries.filter((e) => e.bid === maxBid && e.bid > 0);
+    if (!winners.length) {
+      log(state, ctx.ownerId, '「拍卖」：无人出价，流拍');
+    }
+    for (const { p, bid } of winners) {
+      transferRes(p, undefined, 'money', bid);
+      addRes(p, 'score', bid);
+      log(state, p.id, `「拍卖」最高出价（${bid}）：付 ${bid} 金钱，+${bid} ${RES_LABEL.score}`);
+    }
+  }
+
+  ctx.scratch = { ...ctx.scratch, __bids: '' };
+  return undefined;
 }
 
 function handleSelect(

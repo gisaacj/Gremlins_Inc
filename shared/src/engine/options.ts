@@ -125,7 +125,7 @@ export function diceTableOf(cellType: string): Record<number, DiceOutcome> {
  * 目前只认「厄运」——Risk 格掷出 1 时触发。其余（如「谢谢参与」）无需动作。
  * 文案随语言变化，所以用关键词匹配而不是全等。
  */
-function handleSpecialOutcome(state: EngineState, p: EnginePlayer, special: string): void {
+export function handleSpecialOutcome(state: EngineState, p: EnginePlayer, special: string): void {
   if (/厄运|Misfortune/i.test(special)) {
     drawMisfortune(state, p);
   }

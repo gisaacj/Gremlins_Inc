@@ -275,7 +275,50 @@ SecretAgent_Shaking_The_Tail
 
 `centralMisfortuneId(map)` 就按"出入度之和最大"取，不写死格号。
 
-**18. 岔路口必须由玩家选路**
+**18. 别把"有结算差异"的原语归并进 ROLL 分支**
+
+`CasinoBonus` / `Casino` / `Junkyard` / `RiskVotes` / `MoneyRoll` / `TreasureReroll`
+曾经和 `ROLL` 写在同一个 case 组里，只 `rollDice` 就 `return`——
+**实际效果完全没结算**，而"case 标签存在"的覆盖度测试一路绿灯。
+
+现在 `ROLL` 分支只允许放真正的"只掷骰"原语，`coverage.test.ts` 会专门
+检查该分支里有没有混入别的 case：
+
+```ts
+// coverage.test.ts
+const m = interp.match(/case 'ROLL':([\s\S]*?)return undefined;\s*\}/);
+const inBranch = [...m[1].matchAll(/case '([A-Za-z0-9_]+)':/g)].map((x) => x[1]);
+const suspicious = inBranch.filter((t) => t !== 'ROLL');   // 有就报错
+```
+
+**19. 核对规则要看英文，中文文案常被截断**
+
+同一个 `DescriptionID` 的中英文长度可能差很多：
+
+| 卡 | 中文 | 英文补充 |
+|---|---|---|
+| a027「轻松赌博」 | 在赌场中赌博。+{1}次额外的走牌。 | **If you win, your winnings triple.** If you lose more $ than you have, **you don't get ^**. |
+| a022「装腔作势」 | 触发赌博站点效果，并额外获得等同于骰子点数的&。 | …**In addition to its results**: + as many & as the number rolled. |
+| a061「拍卖」 | 出价最高的玩家：支付出价金额，并获得{1}*。 | **The highest bidder** pays their bid… |
+| m024「诈骗集团」 | 掷骰子 - | Roll the dice: |
+
+**中文只够做索引，规则细节要以英文为准**（有时两边都截断，那就要看参数表）。
+
+**20. 语言包里有一整套"完整规则说明"**
+
+除了卡牌/格子的简短文案，文案表里还有**教学用的完整规则**，比格子说明更权威：
+
+```
+13470103974249897466  A bribe is the amount of $ that you must pay when you pass the
+                      Bribe spot (when you stop on this spot, you pay double).
+18081790195221274124  Your bribe is equal to $20 + the value of your malice (^).
+15775947102973533699  Whenever you stop on the Police spot, you must either roll the dice
+                      - or pay ~ to avoid the risk of getting arrested.
+```
+
+查规则时先在文案表里搜关键词，往往能找到比 `text.description` 更完整的版本。
+
+**21. 岔路口必须由玩家选路**
 
 真实地图**不是单环，而是分支图**。普通地图 67 格的出度分布：
 

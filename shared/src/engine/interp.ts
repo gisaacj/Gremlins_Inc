@@ -18,7 +18,7 @@ import {
 import { fireTrigger as firePermTrigger } from './permanents.js';
 import { fireAbility } from './abilities.js';
 import { collectButtons } from './dialog.js';
-import { diceTableOf, jailTermFor } from './options.js';
+import { diceTableOf, handleSpecialOutcome, jailTermFor } from './options.js';
 import {
   addRes, firstId, firstNumber, firstResource, hasTag, parseParams, payAmount, transferRes,
   type ParamSlot,
@@ -746,16 +746,123 @@ function execAction(
     }
 
     // ============ 骰子类 ============
-    case 'ROLL':
-    case 'MoneyRoll':
-    case 'Casino':
-    case 'CasinoBonus':
-    case 'Junkyard':
-    case 'RiskVotes':
-    case 'TreasureReroll': {
+    // 注意：这里**只能**放真正的"只掷骰"原语。
+    // 曾经把 CasinoBonus / RiskVotes / MoneyRoll 等也归进来，结果它们
+    // 只掷骰、完全不结算。现在 coverage 测试专门拦这种归并。
+    case 'ROLL': {
       const o = owner(state, ctx);
       state.lastRoll = rollDice(state);
       log(state, o.id, `${ctx.source}：掷骰 ${state.lastRoll}`);
+      return undefined;
+    }
+
+    // m024「诈骗集团」：掷骰，按**逐点金额表**结算。
+    //   ActionParams = ["-100","-70","-50","-30","-10","10"]，与卡牌
+    //   params [100,70,50,30,10,10] 同值 → 点数 i 对应第 i 个金额。
+    //   原版说明在这张卡上被截断（只到"掷骰子："），所以规则依据是参数表本身。
+    case 'MoneyRoll': {
+      const o = owner(state, ctx);
+      const table = (action.params ?? []).map((x) => Number(x) || 0);
+      const dice = rollDice(state);
+      state.lastRoll = dice;
+      const delta = table[dice - 1] ?? 0;
+      if (delta >= 0) addRes(o, 'money', delta);
+      else addRes(o, 'money', -Math.min(o.res.money, -delta));
+      log(state, o.id, `${ctx.source}：掷出 ${dice} → ${delta >= 0 ? '+' : ''}${delta} ${RES_LABEL.money}`);
+      return undefined;
+    }
+
+    // ============ 赌场 / 摇骰类卡牌 ============
+    // a027「轻松赌博」：在赌场赌博，**赢钱翻三倍**；输的钱超过持有则**不涨罪恶**；
+    //                  另有 AddTurn 给额外走牌（由后续动作负责）。
+    case 'CasinoBonus': {
+      const o = owner(state, ctx);
+      const table = diceTableOf('Casino');
+      const dice = rollDice(state);
+      state.lastRoll = dice;
+      const gain = table[dice]?.gain?.money ?? 0;
+      if (gain > 0) {
+        // 赢钱翻三倍（相对赌场标准表的金额）
+        const win = gain * 3;
+        addRes(o, 'money', win);
+        log(state, o.id, `${ctx.source}：赌场掷出 ${dice}，赢钱翻三倍 +${win} ${RES_LABEL.money}`);
+      } else if (gain < 0) {
+        const paid = Math.min(o.res.money, -gain);
+        addRes(o, 'money', -paid);
+        // 「输的钱超过持有则不涨罪恶」——所以这里**不**加罪恶
+        log(state, o.id, `${ctx.source}：赌场掷出 ${dice}，损失 ${paid} ${RES_LABEL.money}（不涨 ${RES_LABEL.malice}）`);
+      } else {
+        log(state, o.id, `${ctx.source}：赌场掷出 ${dice}，无事`);
+      }
+      return undefined;
+    }
+
+    // 监狱牌 t002「大转盘」：赌场骰表结算（params 与赌场格完全一致）
+    case 'Casino': {
+      const o = owner(state, ctx);
+      const table = diceTableOf('Casino');
+      const dice = rollDice(state);
+      state.lastRoll = dice;
+      const outcome = table[dice]?.gain;
+      if (outcome) {
+        for (const [k, v] of Object.entries(outcome)) {
+          if (!v) continue;
+          addRes(o, k as ResourceKey, v);
+        }
+      }
+      log(state, o.id, `${ctx.source}：地下轮盘掷出 ${dice} → ${JSON.stringify(outcome ?? {})}`);
+      return undefined;
+    }
+
+    // 监狱牌 t003「垃圾」：规则与垃圾场相同（params 全 0，用垃圾场格的表）
+    case 'Junkyard': {
+      const o = owner(state, ctx);
+      const table = diceTableOf('Junkyard');
+      const dice = rollDice(state);
+      state.lastRoll = dice;
+      const outcome = table[dice];
+      if (outcome?.gain) {
+        for (const [k, v] of Object.entries(outcome.gain)) {
+          if (!v) continue;
+          addRes(o, k as ResourceKey, v);
+        }
+      }
+      log(state, o.id, `${ctx.source}：翻垃圾掷出 ${dice} → ${outcome?.special ?? JSON.stringify(outcome?.gain ?? {})}`);
+      return undefined;
+    }
+
+    // a022「装腔作势」：触发赌博站效果，**并额外获得等同于骰子点数的选票**
+    case 'RiskVotes': {
+      const o = owner(state, ctx);
+      const table = diceTableOf('Risk');
+      const dice = rollDice(state);
+      state.lastRoll = dice;
+      const outcome = table[dice];
+      if (outcome?.gain) {
+        for (const [k, v] of Object.entries(outcome.gain)) {
+          if (!v) continue;
+          addRes(o, k as ResourceKey, v);
+        }
+      }
+      if (outcome?.special) handleSpecialOutcome(state, o, outcome.special);
+      addRes(o, 'vote', dice);
+      log(state, o.id, `${ctx.source}：赌博站掷出 ${dice}，额外 +${dice} ${RES_LABEL.vote}`);
+      return undefined;
+    }
+
+    // a074「魔幻饰品」：搜寻宝藏，可再掷一次（只有最后一次算数）
+    case 'TreasureReroll': {
+      const o = owner(state, ctx);
+      const table = diceTableOf('Treasure');
+      // 「可再掷一次」——AI/自动流程用两掷取后者；人类交互留待 UI
+      const first = rollDice(state);
+      const second = rollDice(state);
+      const dice = second;
+      state.lastRoll = dice;
+      const gain = table[dice]?.gain?.money ?? 0;
+      if (gain) addRes(o, 'money', gain);
+      log(state, o.id,
+        `${ctx.source}：搜寻宝藏（重掷 ${first} → ${dice}，只有最后一次算数）+${gain} ${RES_LABEL.money}`);
       return undefined;
     }
 

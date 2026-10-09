@@ -99,7 +99,22 @@ check('没有"落到 default 分支"的未登记原语', () => {
     throw new Error('default 分支未记录"未实现"日志，无法从对局中发现遗漏');
   }
 });
-check('标记型 case（MOVE / SpecialMove）有说明注释', () => {
+check('没有"空实现"的原语（只掷骰不结算）', () => {
+  // 教训：`CasinoBonus` / `RiskVotes` / `MoneyRoll` 等曾和 `ROLL` 归在一起，
+  // 只 rollDice 就 return，实际效果完全没结算。仅检查"case 标签存在"
+  // 是拦不住这类问题的，所以这里专门盯**归并到 ROLL 分支**的 case。
+  const interp = readFileSync(resolve(ROOT, 'shared/src/engine/interp.ts'), 'utf8');
+  const m = interp.match(/case 'ROLL':([\s\S]*?)return undefined;\s*\}/);
+  if (!m) throw new Error('未找到 ROLL 分支');
+  // ROLL 分支里应当只有真正的掷骰原语；混进别的说明没结算
+  const allowed = new Set(['ROLL']);
+  const inBranch = [...m[1].matchAll(/case '([A-Za-z0-9_]+)':/g)].map((x) => x[1]);
+  const suspicious = inBranch.filter((t) => !allowed.has(t));
+  if (suspicious.length) {
+    throw new Error(`这些原语被归并进 ROLL 分支（只掷骰不结算）：${suspicious.join(', ')}`);
+  }
+});
+check('MOVE / SpecialMove 这类"标记型"case 有说明注释', () => {
   const interp = readFileSync(resolve(ROOT, 'shared/src/engine/interp.ts'), 'utf8');
   const at = interp.indexOf("case 'MOVE'");
   const block = interp.slice(at, at + 240);

@@ -752,16 +752,19 @@ function applyBundle(
 export function endTurn(state: EngineState): void {
   const p = actorOf(state);
   if (p) {
-    // 「商业头脑」：本回合标记过"可再打一张" → 不结束回合，让玩家继续
-    if (p.flags['extraCardAtOffice'] === 1 && !p.isAI) {
+    // 「商业头脑」：用过"再打一张牌"后，这一次 endTurn 只负责复位状态，
+    // 让玩家/AI 能再打一张效果牌。
+    // 流程：playAgain(movedThisTurn=true, optionsOffered=0)
+    //   → playCard  → endTurn(这里复位) → endTurn(真正结束)
+    if (p.flags['extraCardAtOffice'] === 1) {
       p.flags['extraCardAtOffice'] = 0;
-      p.movedThisTurn = false;
-      pushLog(state, p.id, '可再打一张牌（本回合不结束）');
+      p.movedThisTurn = true;
+      pushLog(state, p.id, '「商业头脑」：可再打一张牌');
       return;
     }
 
     // 落到有可选动作的地点时，先不结束回合——让玩家决定要不要用
-    // （投资、卖选票、打工、赌博…）。AI 不等待，直接走 endTurn 由调用方处理。
+    // （投资、卖选票、打工、赌博…）。AI 不等待，由 tryOption 自行消费。
     if (!p.isAI && p.movedThisTurn && !p.flags['optionsOffered']
       && availableOptions(state, p.id).length > 0) {
       p.flags['optionsOffered'] = 1;

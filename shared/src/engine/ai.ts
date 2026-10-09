@@ -48,9 +48,12 @@ export class AIPlayer {
     const log: AIStep[] = [];
     const start = this.steps.get(playerId) ?? 0;
     let n = 0;
+    /** 连续"没产生任何变化"的步数——用于跳出死循环 */
+    let stalls = 0;
 
     while (n < this.maxStepsPerCall) {
       if (state.phase !== 'playing') break;
+      const stamp = `${state.round}:${state.currentIndex}:${state.log.length}:${state.pending?.kind ?? '-'}`;
 
       // 1) 挂起决策
       if (state.pending) {
@@ -63,13 +66,13 @@ export class AIPlayer {
         continue;
       }
 
-      // 2) 不是它的回合
+      // 不是它的回合
       if (!isTurn(state, playerId)) break;
 
       const me = getPlayer(state, playerId);
       if (!me) break;
 
-      // 3) 狱中：服刑
+      // 狱中：服刑
       if (me.inJail) {
         const r = jailTurn(state, playerId);
         log.push({ playerId, action: 'jail', detail: r.ok ? undefined : r.error });
@@ -78,14 +81,20 @@ export class AIPlayer {
         break;
       }
 
-      // 4) 可选动作：只在明显有利时做（投资回本、卖资源、打工…）
+      // 可选动作：只在明显有利时做（投资回本、卖资源、打工…）
       if (this.tryOption(state, playerId)) {
         log.push({ playerId, action: 'choose', detail: '可选动作' });
         n++;
+        stalls = this.tick(state, stamp, stalls);
+        if (stalls >= 3) {
+          log.push({ playerId, action: 'idle', detail: '连续无进展，强制结束回合' });
+          this.endTurn(state, playerId);
+          break;
+        }
         continue;
       }
 
-      // 5) 效果牌：优先高分
+      // 效果牌：优先高分
       const playable = playableCards(state, playerId).sort((a, b) => cardScore(b) - cardScore(a));
       if (playable.length) {
         const r = playCard(state, playerId, playable[0]);
@@ -94,10 +103,14 @@ export class AIPlayer {
           detail: `${CARD_BY_ID[playable[0]]?.name ?? playable[0]}${r.ok ? '' : ` 失败:${r.error}`}`,
         });
         n++;
-        if (r.ok) continue;
+        if (r.ok) {
+          stalls = this.tick(state, stamp, stalls);
+          if (stalls >= 3) break;
+          continue;
+        }
       }
 
-      // 6) 移动：步数最大的优先
+      // 移动：步数最大的优先
       const movable = movableCards(state, playerId).sort(
         (a, b) => (CARD_BY_ID[b]?.move ?? 0) - (CARD_BY_ID[a]?.move ?? 0),
       );
@@ -110,10 +123,14 @@ export class AIPlayer {
           detail: `${CARD_BY_ID[cardId]?.name ?? cardId}${r.ok ? '' : ` 失败:${r.error}`}`,
         });
         n++;
-        if (r.ok) continue;
+        if (r.ok) {
+          stalls = this.tick(state, stamp, stalls);
+          if (stalls >= 3) break;
+          continue;
+        }
       }
 
-      // 7) 收尾
+      // 收尾
       this.endTurn(state, playerId);
       log.push({ playerId, action: 'endTurn' });
       n++;
@@ -122,6 +139,17 @@ export class AIPlayer {
 
     this.steps.set(playerId, start + n);
     return log;
+  }
+
+  /**
+   * 循环护栏：比较本步前后的状态指纹，连续多步毫无变化就认为陷入死循环。
+   *
+   * 这不是防御性编程——`ability.playAgain` 曾经因为"设标记 → 标记被消费 →
+   * 又能设标记"造成服务端 AI 刷了两分钟日志。
+   */
+  private tick(state: EngineState, prevStamp: string, stalls: number): number {
+    const now = `${state.round}:${state.currentIndex}:${state.log.length}:${state.pending?.kind ?? '-'}`;
+    return now === prevStamp ? stalls + 1 : 0;
   }
 
   /**
@@ -148,16 +176,22 @@ export class AIPlayer {
       if (id.startsWith('ability.discardOne')) return 8;
       if (id.startsWith('ability.drawAndKeep')) return 7;
       if (id.startsWith('ability.doubleIncome')) return 7;
+      // 藏宝阁：纯收益（1~6 依次 +10/+25/+50/+100/+150/+200），必做
+      if (id.startsWith('treasure.dig')) return 2;
       if (id.startsWith('danger.insure')) return 9;
-      if (id.startsWith('ability.playAgain')) return -1; // 需要后续打牌，交由下一步处理
-      // 演讲：下注到 50 时成功率 70%，且赢了退本金 → 正期望
-      if (id.startsWith('tribune.speak.')) return 6;
+      // 需要"后续动作"的选项 AI 不碰：容易在「设标记 → 消费 → 再设标记」
+      // 之间打转（曾造成 AI 无限循环，服务端日志刷了两分钟）。
+      if (id.startsWith('ability.playAgain') || id.startsWith('ability.astralFromBank')) return 99;
+      // 演讲：原版输赢都扣下注额，赢了才 +1 选票（下注 50 命中 2~6，即 5/6 概率）。
+      // 期望取决于选票的相对价值，AI 从保守：只试最小两档。
+      if (id === 'tribune.speak.10' || id === 'tribune.speak.20') return 7;
+      if (id.startsWith('tribune.speak.')) return 99;
       if (id === 'bank.invest') return 10;
       return 99; // 赌博类排最后，等于不做
     };
     // 只做排名靠前的几类
     const candidates = opts
-      .filter((o) => rank(o.id) <= 6)
+      .filter((o) => rank(o.id) <= 7)
       .sort((a, b) => rank(a.id) - rank(b.id));
     if (!candidates.length) return false;
 

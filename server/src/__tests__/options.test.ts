@@ -235,6 +235,38 @@ check('「商业头脑」在办公楼给出「再打一张牌」', () => {
   const o = availableOptions(s, p.id).find((x) => x.id === 'ability.playAgain');
   assert.ok(o, `未给出再打一张：${availableOptions(s, p.id).map((x) => x.id).join(', ')}`);
 });
+check('用过「再打一张牌」后不会死锁（advisory 标记会被消费）', () => {
+  const s = game(['Enterpreneur', 'Engineer']);
+  const p = byChar(s, 'Enterpreneur');
+  putAt(s, p, 'Office');
+  p.movedThisTurn = true;
+
+  const r = doOption(s, p.id, 'ability.playAgain');
+  assert.ok(r.ok, r.error);
+  assert.equal(p.flags['extraCardAtOffice'], 1);
+  assert.equal(p.movedThisTurn, true, '应可以再打一张效果牌');
+
+  // 第一次 endTurn：复位（允许再打一张），不换人
+  const before = s.currentIndex;
+  endTurn(s);
+  assert.equal(s.currentIndex, before, '第一次 endTurn 应复位而非换人');
+  assert.equal(p.flags['extraCardAtOffice'], 0, '标记应被清掉');
+  assert.equal(p.movedThisTurn, true, '应仍可打牌');
+
+  // 第二次 endTurn：必须真正结束回合（曾经这里无限循环）
+  endTurn(s);
+  assert.notEqual(s.currentIndex, before, '第二次 endTurn 必须换人');
+});
+check('重复调 endTurn 最多几步就会换人（循环护栏）', () => {
+  const s = game(['Enterpreneur', 'Engineer']);
+  const p = byChar(s, 'Enterpreneur');
+  putAt(s, p, 'Office');
+  p.movedThisTurn = true;
+  const before = s.currentIndex;
+  let steps = 0;
+  while (s.currentIndex === before && steps < 6) { endTurn(s); steps++; }
+  assert.ok(steps <= 3, `应在少数几步内换人，实际 ${steps} 步`);
+});
 check('「保险优惠」把冒险格保险价从 40 降到 10', () => {
   const s = game(['Collector', 'Engineer']);
   const p = byChar(s, 'Collector');

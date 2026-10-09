@@ -17,6 +17,7 @@ import {
 } from './model.js';
 import { fireTrigger as firePermTrigger } from './permanents.js';
 import { fireAbility } from './abilities.js';
+import { jailTermFor } from './options.js';
 import {
   addRes, firstId, firstNumber, hasTag, parseParams, payAmount, transferRes,
   type ParamSlot,
@@ -185,11 +186,12 @@ export function arrest(state: EngineState, p: EnginePlayer, reason: string): voi
 
   const jail = findCellByType(state, 'Jail');
   if (jail) p.cellId = jail;
-  // 「秘密关系」：按掷出 6 判刑；否则正常掷骰
+  // 刑期用原版 `Jail` 格子的 Label 表（1,2 = {3}；3,4 = {2}；5,6 = {1}）。
+  // 「秘密关系」等角色能力把点数固定为 6。
   const alwaysSix = abilFlags.arrestAsSix === true;
   const dice = alwaysSix ? 6 : rollDice(state);
   p.inJail = true;
-  p.term = dice <= 2 ? 4 : dice <= 4 ? 3 : 2;
+  p.term = jailTermFor(dice);
   log(state, p.id,
     `${nameOf(p)} 被逮捕入狱（${reason}），刑期 ${p.term} 次走牌（掷骰 ${dice}${alwaysSix ? '，角色能力固定为 6' : ''}）`);
 

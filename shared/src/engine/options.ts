@@ -22,11 +22,153 @@
 // =============================================================
 import type { EnginePlayer, EngineState } from './model.js';
 import {
-  CARD_BY_ID, cellTypeOf, getCell, getMap, getPlayer, currentPlayer as modelCurrentPlayer,
+  CARD_BY_ID, CELL_TYPE_BY_NAME, cellTypeOf, getCell, getMap, getPlayer,
+  currentPlayer as modelCurrentPlayer,
 } from './model.js';
 import { addRes, hasRes, transferRes } from './resources.js';
-import { discardFromHand, drawTo, random, rollDice } from './interp.js';
+import { discardFromHand, drawMisfortune, drawTo, rollDice } from './interp.js';
 import { abilitiesOf } from './abilities.js';
+
+// =============================================================
+// 骰子结算表（数据驱动）
+//
+// 原版把"掷骰结果 → 效果"直接写在格子的 `Label1..6` 里，例如：
+//
+//   Casino   1 = -{1}$          6 = +{6}$
+//   Junkyard 1 = -{1}&          2 = 谢谢参与      4 = +{4}$
+//   Risk     1 = 厄运           3 = -{3}&, +{3}^
+//   Tribune  6 = +1&            5, 6 = +1&        2, 3, 4, 5, 6 = +1&
+//   Jail     1 = {3} 次走牌     3 = {2} 次走牌
+//   Treasure 1 = +{1}$          6 = +{6}$
+//
+// `{N}` 是 `params[N-1]` 的占位。**必须解析这些文案而不是猜公式**——
+// 之前用"最低点数→奖金"的递增表实现 Risk/Casino 是错的。
+// =============================================================
+
+/** 一条骰子结算 */
+export interface DiceOutcome {
+  /** 触发该结果的点数 */
+  faces: number[];
+  /** 资源增减 */
+  gain?: { score?: number; vote?: number; malice?: number; money?: number; income?: number };
+  /** 非资源的特殊结果（原版文案，如「厄运」「谢谢参与」） */
+  special?: string;
+}
+
+/** 符号 → 资源：`|` 收入、`&` 选票、`^` 罪恶、`*` 齿轮、`$` 金钱（来自游戏内符号说明） */
+const RES_BY_SYMBOL: Record<string, 'income' | 'vote' | 'malice' | 'score' | 'money'> = {
+  '|': 'income', '&': 'vote', '^': 'malice', '*': 'score', '$': 'money',
+};
+
+const RES_ZH: Record<string, string> = {
+  score: '齿轮', vote: '选票', malice: '罪恶', money: '金钱', income: '收入',
+};
+
+/** 把 `{N}` 换成 params[N-1] */
+function subst(text: string, params: number[]): string {
+  return text.replace(/\{(\d+)\}/g, (_, i) => String(params[Number(i) - 1] ?? 0));
+}
+
+/**
+ * 解析一个格子的骰子结算表。
+ *
+ * @returns 按点数 1..6 索引；无该点数的格子不会出现在结果里
+ */
+export function parseDiceTable(labels: string[], params: number[]): Record<number, DiceOutcome> {
+  const out: Record<number, DiceOutcome> = {};
+  for (const raw of labels) {
+    const text = subst(raw, params);
+    const eq = text.indexOf('=');
+    if (eq < 0) continue;
+
+    const facePart = text.slice(0, eq).trim();
+    const effectPart = text.slice(eq + 1).trim();
+
+    // 点数可能形如 "5, 6" 或 "2，3"（中文逗号）
+    const faces = facePart
+      .split(/[,，\s]+/)
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isInteger(n) && n >= 1 && n <= 6);
+    if (!faces.length) continue;
+
+    const outcome: DiceOutcome = { faces };
+    if (/[+-]?\d/.test(effectPart)) {
+      const gain: NonNullable<DiceOutcome['gain']> = {};
+      const re = /([+-])\s*(\d+)\s*([|&^*$])/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(effectPart))) {
+        const sign = m[1] === '-' ? -1 : 1;
+        const key = RES_BY_SYMBOL[m[3]];
+        if (key) gain[key] = (gain[key] ?? 0) + Number(m[2]) * sign;
+      }
+      if (Object.keys(gain).length) outcome.gain = gain;
+      else outcome.special = effectPart; // 有数字但不是资源语法（如「3 次走牌」）
+    } else {
+      outcome.special = effectPart;
+    }
+
+    for (const f of faces) out[f] = outcome;
+  }
+  return out;
+}
+
+/** 取某格子的骰子结算表 */
+export function diceTableOf(cellType: string): Record<number, DiceOutcome> {
+  const def = CELL_TYPE_BY_NAME[cellType];
+  if (!def?.labels?.length) return {};
+  return parseDiceTable(def.labels, def.params);
+}
+
+/**
+ * 处理骰子表里的"非资源"结果。
+ *
+ * 目前只认「厄运」——Risk 格掷出 1 时触发。其余（如「谢谢参与」）无需动作。
+ * 文案随语言变化，所以用关键词匹配而不是全等。
+ */
+function handleSpecialOutcome(state: EngineState, p: EnginePlayer, special: string): void {
+  if (/厄运|Misfortune/i.test(special)) {
+    drawMisfortune(state, p);
+  }
+}
+
+/**
+ * 监狱刑期：取自原版 `Jail` 格子的 Label 表——
+ * `1, 2 = {3} 次走牌`、`3, 4 = {2} 次走牌`、`5, 6 = {1} 次走牌`，
+ * `{N}` 指向 `params[N-1]`（该格参数为 [2, 3, 4]，即 1~2 点判 4 回合）。
+ *
+ * 不要按"点数越小刑期越长"的直觉写死：数值来自数据。
+ */
+export function jailTermFor(dice: number): number {
+  const def = CELL_TYPE_BY_NAME.Jail;
+  if (!def?.labels?.length) return dice <= 2 ? 4 : dice <= 4 ? 3 : 2;
+  const table = parseDiceTable(def.labels, def.params);
+  const special = table[dice]?.special ?? '';
+  const m = special.match(/(\d+)/);
+  return m ? Number(m[1]) : 2;
+}
+
+/** 掷骰并套用结算表 */
+function rollOnTable(
+  state: EngineState,
+  p: EnginePlayer,
+  table: Record<number, DiceOutcome>,
+): { dice: number; outcome?: DiceOutcome; message: string } {
+  const dice = rollDice(state);
+  state.lastRoll = dice;
+  const outcome = table[dice];
+  if (!outcome) return { dice, message: `掷出 ${dice}` };
+
+  const parts: string[] = [];
+  if (outcome.gain) {
+    for (const [k, v] of Object.entries(outcome.gain)) {
+      if (!v) continue;
+      addRes(p, k as 'score' | 'vote' | 'malice' | 'money' | 'income', v);
+      parts.push(`${v > 0 ? '+' : ''}${v} ${RES_ZH[k] ?? k}`);
+    }
+  }
+  if (outcome.special) parts.push(outcome.special);
+  return { dice, outcome, message: parts.join('，') || '无事发生' };
+}
 
 /** 一个可选动作 */
 export interface OptionSpec {
@@ -62,10 +204,10 @@ function cellOptions(state: EngineState, p: EnginePlayer): OptionSpec[] {
 
   if (def?.optional) {
     out.push(...stationOptions(state, p, cell.cellType, pr, def.text.description));
-  } else if (cell.cellType === 'Danger') {
-    // 冒险格的保险原版是"必选"，但买不买由玩家定，所以即使
-    // OptionalFlag=false 也要给出这个选项。
-    out.push(...stationOptions(state, p, 'Danger', pr, def?.text.description ?? ''));
+  } else if (cell.cellType === 'Danger' || cell.cellType === 'Treasure') {
+    // 冒险格与藏宝阁的掷骰原版是"必掷"，但**掷不掷**仍由玩家决定，
+    // 所以即使 OptionalFlag=false 也要给出这个选项。
+    out.push(...stationOptions(state, p, cell.cellType, pr, def?.text.description ?? ''));
   }
 
   // 角色能力带来的可选动作：与格子的 OptionalFlag 无关
@@ -215,6 +357,12 @@ function stationOptions(
     // 赌场：掷骰赌博
     case 'Casino': {
       out.push({ id: 'casino.gamble', label: '赌博（掷骰）', description });
+      break;
+    }
+
+    // 藏宝阁：掷骰寻宝（原版必掷）
+    case 'Treasure': {
+      out.push({ id: 'treasure.dig', label: '寻宝（掷骰）', description });
       break;
     }
 
@@ -453,42 +601,63 @@ export function doOption(
     }
 
     case 'junkyard': {
-      const bonus = pr[1] || 30;
+      const table = diceTableOf('Junkyard');
+      const r = rollOnTable(state, p, table);
+      // 最穷加成：任何点数结果都额外 +param2
       const poorest = p.res.money === Math.min(...state.players.map((x) => x.res.money));
-      const dice = rollDice(state);
-      state.lastRoll = dice;
-      let gained = dice * 10;
-      if (poorest) gained += bonus;
-      // 「了不起的乞丐」：最穷时额外加成（替代常规奖励）
-      for (const a of abilitiesOf(p)) {
-        if (a.flag === 'homelessTheGreat' && poorest) gained += a.nums?.[0] ?? 60;
+      const bonus = pr[1] || 30;
+      if (poorest) {
+        addRes(p, 'money', bonus);
+        // 「了不起的乞丐」：最穷时额外加成（取代常规 +30）
+        for (const a of abilitiesOf(p)) {
+          if (a.flag === 'homelessTheGreat') addRes(p, 'money', a.nums?.[0] ?? 60);
+        }
       }
-      addRes(p, 'money', gained);
-      logIt(`翻垃圾掷出 ${dice}：+${gained} 金${poorest ? '（最穷加成）' : ''}`);
-      return done(`翻垃圾掷出 ${dice}，+${gained} 金`);
+      logIt(`翻垃圾掷出 ${r.dice}：${r.message}${poorest ? `，最穷额外 +${bonus}` : ''}`);
+      return done(`掷出 ${r.dice}：${r.message}${poorest ? `，最穷额外 +${bonus}` : ''}`);
+    }
+
+    case 'treasure': {
+      // 藏宝阁：掷骰寻宝（原版必掷，按 Label 表结算）
+      const table = diceTableOf('Treasure');
+      const r = rollOnTable(state, p, table);
+      logIt(`藏宝阁掷出 ${r.dice}：${r.message}`);
+      return done(`掷出 ${r.dice}：${r.message}`);
     }
 
     case 'tribune': {
       const amt = Number(parts[2] ?? 0);
       if (amt <= 0) return fail('下注额无效');
       if (p.res.money < amt) return fail(`需要 ${amt} 金钱`);
-      // 原版：下注越高，拿到选票的概率越高。
-      // 赢了**退还本金**并 +1 选票；输了失去下注额。
-      const chance = Math.min(0.9, 0.2 + amt / 100);
-      const win = random(state) < chance;
-      // 「超凡魅力」：演讲额外 +1 选票
+
+      // 原版：下注额与掷骰门槛一一对应（`Label1..5`），**输赢都扣下注额**。
+      //   下注 10 → 需 6        下注 50 → 需 2~6
+      // `diceTableOf` 是按"点数 → 结果"合并的（同一结果会被多个点数共享），
+      // 所以这里要按**档位**逐行解析，取该档最低命中点数作为门槛。
+      const def = CELL_TYPE_BY_NAME.Tribune;
+      const idx = def.params.findIndex((v, i) => v === amt && i < 5);
+      if (idx < 0) return fail(`没有 ${amt} 这档下注`);
+
+      const tier = parseDiceTable([def.labels[idx]], def.params);
+      const faces = tier[Object.keys(tier).map(Number)[0]]?.faces;
+      if (!faces?.length) return fail('该档位无结算');
+      const need = Math.min(...faces);
+
+      addRes(p, 'money', -amt);
+      const dice = rollDice(state);
+      state.lastRoll = dice;
+      const win = dice >= need;
+
       let bonus = 0;
       for (const a of abilitiesOf(p)) {
         if (a.flag === 'politicianCharisma') bonus += a.nums?.[0] ?? 1;
       }
-      if (win) {
-        addRes(p, 'vote', 1 + bonus);
-        logIt(`演讲下注 ${amt} 成功：+${1 + bonus} 选票（本金退回）`);
-        return done(`演讲成功，+${1 + bonus} 选票`);
-      }
-      addRes(p, 'money', -amt);
-      logIt(`演讲下注 ${amt} 失败：失去 ${amt} 金`);
-      return done(`演讲失败，失去 ${amt} 金`);
+      const votes = (tier[need]?.gain?.vote ?? 0) + (win ? bonus : 0);
+      if (win && votes) addRes(p, 'vote', votes);
+      logIt(`演讲下注 ${amt} 掷出 ${dice}（需 ≥${need}）：${win ? `+${votes} 选票` : '失败'}`);
+      return done(win
+        ? `掷出 ${dice}（需 ≥${need}），演讲成功 +${votes} 选票`
+        : `掷出 ${dice}（需 ≥${need}），演讲失败，损失 ${amt} 金`);
     }
 
     case 'danger': {
@@ -504,29 +673,30 @@ export function doOption(
     }
 
     case 'risk': {
-      const dice = rollDice(state);
-      state.lastRoll = dice;
-      // 原版 Risk 参数是最低点数 → 奖金 的对照表
-      const table: Array<[number, number]> = [];
-      for (let i = 1; i + 1 < pr.length; i += 2) table.push([pr[i], pr[i + 1]]);
-      let gain = 0;
-      for (const [need, amount] of table) if (dice >= need) gain = amount;
-      // 「Riskomatic-40」类永久卡与「赌徒幸运星」重掷由能力/永久卡钩子处理
-      if (gain > 0) addRes(p, 'money', gain);
-      logIt(`试手气掷出 ${dice}：${gain > 0 ? `+${gain} 金` : '无奖励'}`);
-      return done(`掷出 ${dice}${gain > 0 ? `，+${gain} 金` : '，无奖励'}`);
+      // 赌博格：1 = 厄运，2 = 扣钱，3 = 扣选票并加罪恶，4~6 = 加钱
+      const table = diceTableOf('Risk');
+      const r = rollOnTable(state, p, table);
+      if (r.outcome?.special) {
+        // 原版：掷出 1 遭遇厄运
+        handleSpecialOutcome(state, p, r.outcome.special);
+      }
+      logIt(`试手气掷出 ${r.dice}：${r.message}`);
+      return done(`掷出 ${r.dice}：${r.message}`);
     }
 
     case 'casino': {
-      const dice = rollDice(state);
-      state.lastRoll = dice;
-      const table: Array<[number, number]> = [];
-      for (let i = 1; i + 1 < pr.length; i += 2) table.push([pr[i], pr[i + 1]]);
-      let gain = 0;
-      for (const [need, amount] of table) if (dice >= need) gain = amount;
-      if (gain > 0) {
-        addRes(p, 'money', gain);
-        // 「潇洒退场」：赌场赢钱 +1 额外走牌（每回合一次）
+      // 赌场：1~3 扣钱，4~6 加钱；扣款超过持有则 +2 罪恶
+      const table = diceTableOf('Casino');
+      const before = p.res.money;
+      const r = rollOnTable(state, p, table);
+      const delta = p.res.money - before;
+      if (delta < 0) {
+        // 原版："If you lose more $ than what you have: +2^"
+        // addRes 会把金钱夹到 0，所以用"应付额 > 持有额"判断
+        const owed = -(r.outcome?.gain?.money ?? 0);
+        if (owed > before) addRes(p, 'malice', 2);
+        // 「潇洒退场」只在赌场**赢钱**时给额外走牌
+      } else if (delta > 0) {
         for (const a of abilitiesOf(p)) {
           if (a.flag !== 'gamblerExtraTurn') continue;
           const key = 'gamblerExtraTurnUsed';
@@ -535,12 +705,9 @@ export function doOption(
           p.extraTurns += 1;
           logIt(`角色能力·${a.label}：+1 次额外走牌`);
         }
-      } else {
-        // 输掉时：若输的钱超过持有，+2 罪恶
-        addRes(p, 'malice', 2);
       }
-      logIt(`赌场掷出 ${dice}：${gain > 0 ? `+${gain} 金` : '输钱，+2 罪恶'}`);
-      return done(`赌场掷出 ${dice}${gain > 0 ? `，+${gain} 金` : '，输钱 +2 罪恶'}`);
+      logIt(`赌场掷出 ${r.dice}：${r.message}`);
+      return done(`掷出 ${r.dice}：${r.message}`);
     }
 
     // ---- 角色能力带来的可选动作 ----
@@ -554,10 +721,19 @@ export function doOption(
           logIt('角色能力·天界俱乐部：从银行直达天界');
           return done('已传送到天界');
         }
-        case 'playAgain':
+        case 'playAgain': {
+          // 可再打一张效果牌：把"本回合已走牌"复位，让 playCard 重新可用。
+          // 关键：**同时清掉 optionsOffered**，否则 endTurn 见到它就提前返回，
+          // 而 playAgain 已经不再出现在选项里 → 回合永远结束不了（死锁）。
+          if (p.flags['extraCardAtOffice'] === 1) return fail('本回合已经用过「再打一张牌」');
           p.flags['extraCardAtOffice'] = 1;
-          logIt('角色能力·商业头脑：可再打一张牌');
-          return done('可再打一张牌（不结束回合）');
+          // 顺手把"本站选项已提示"标上：玩家刚用掉一个选项，
+          // 不应再为同一站点的其他选项多停一次回合。
+          p.flags['optionsOffered'] = 1;
+          p.movedThisTurn = true;
+          logIt('角色能力·商业头脑：可再打一张效果牌');
+          return done('可再打一张效果牌');
+        }
         case 'discardOne': {
           if (!p.hand.length) return fail('没有手牌');
           const dropped = discardFromHand(state, p, 1);

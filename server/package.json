@@ -1,0 +1,30 @@
+{
+  "name": "@gremlins/server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:engine": "tsx src/__tests__/engine.test.ts && tsx src/__tests__/permanents.test.ts && tsx src/__tests__/abilities.test.ts && tsx src/__tests__/server-integration.test.ts",
+    "sim:engine": "tsx src/__tests__/playthrough.ts",
+    "test:engine2": "npm run test:engine",
+    "sim:engine2": "npm run sim:engine"
+  },
+  "dependencies": {
+    "@gremlins/shared": "*",
+    "cors": "^2.8.5",
+    "express": "^4.21.1",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}

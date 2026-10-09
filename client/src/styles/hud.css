@@ -1,0 +1,133 @@
+.hud {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.log-card-link {
+  color: var(--color-gold);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+.log-card-link:hover {
+  text-decoration: solid;
+}
+
+.active-ability-btn {
+  margin-top: 2px;
+  padding: 4px 8px;
+  font-size: 11px;
+  background: var(--color-panel-2);
+  border: 1px solid var(--color-gold);
+  color: var(--color-gold);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.active-ability-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.hud-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  background: var(--color-bg-2);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.hud-resource {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hud-resource .icon {
+  font-size: 14px;
+}
+
+.hud-resource .label {
+  color: var(--color-text-muted);
+  font-size: 10px;
+}
+
+.hud-resource .value {
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.gold { color: var(--color-gold); }
+.votes { color: var(--color-vote); }
+.malice { color: var(--color-malice); }
+.cogs { color: var(--color-cog); }
+
+.cog-bar {
+  position: relative;
+  height: 4px;
+  background: var(--color-bg-2);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 2px;
+}
+
+.cog-bar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-cog), var(--color-gold));
+  transition: width 0.3s;
+}
+
+.player-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.player-status-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: var(--color-bg-2);
+  border-radius: 4px;
+  font-size: 11px;
+  border-left: 3px solid var(--color-border);
+}
+
+.player-status-row.me { background: var(--color-panel-2); }
+.player-status-row.turn { border-left-color: var(--color-success); }
+.player-status-row.mayor { border-left-color: var(--color-gold); }
+.player-status-row.disconnected { opacity: 0.5; }
+
+.player-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 10px;
+  flex: 0 0 18px;
+}
+
+.player-name {
+  flex: 1;
+  font-weight: bold;
+}
+
+.player-res {
+  display: flex;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--color-text-muted);
+}
+
+.tag-mayor { background: var(--color-gold); color: #000; padding: 1px 4px; border-radius: 3px; font-size: 9px; }
+.tag-jail { background: var(--color-malice); color: #fff; padding: 1px 4px; border-radius: 3px; font-size: 9px; }
+.tag-skip { background: #555; color: #ccc; padding: 1px 4px; border-radius: 3px; font-size: 9px; }

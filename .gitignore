@@ -1,0 +1,69 @@
+# Dependencies
+node_modules/
+dist/
+build/
+shared/dist/
+server/dist/
+client/dist/
+
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Capacitor / mobile
+android/
+ios/
+.capacitor/
+
+# Env
+.env
+.env.local
+
+# Build artifacts
+*.tsbuildinfo
+
+# ============================================================
+# 以下目录体积很大（含原版游戏 DLL、OCR 中间产物、临时排查目录），
+# 不纳入版本库。需要数据时按 test/tools/README.md 的管线重新导出。
+# ============================================================
+
+# 数据抽取工作区（含 Assembly-CSharp.dll 与导出的 JSON，约 2.7 GB）
+test/
+
+# OCR 阶段的中间产物与图标（约 2.3 GB）
+gremlins-ocr/
+
+# 一次性的权限修复排查目录
+test-acl-recovery/
+
+# 本地临时文件
+c.log
+c_err.log
+*.tmp
+
+# OCR temporary files
+gremlins-ocr/data/raw/
+gremlins-ocr/logs/
+gremlins-ocr/__pycache__/
+gremlins-ocr/scripts/__pycache__/
+gremlins-ocr/data/icons_unique/jail_dice/
+*.pyc
+
+# Test files
+check_data.py
+client_dev*.log
+client_dev*_err.log
+server_out.log
+server_err.log
+server_start.log
+dev.log
+dev.err.log

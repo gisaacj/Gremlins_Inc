@@ -1,0 +1,26 @@
+{
+  "name": "gremlins-inc-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "《Gremlins, Inc.》网页复刻版 - 局域网联机，可移植移动端",
+  "workspaces": [
+    "shared",
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently -n shared,server,client -c cyan,magenta,yellow \"npm run dev -w shared\" \"npm run dev -w server\" \"npm run dev -w client\"",
+    "build": "npm run build -w shared && npm run build -w server && npm run build -w client",
+    "start": "npm run build -w shared && npm run build -w server && npm run build -w client && node server/dist/index.js",
+    "start:server": "npm run start -w server",
+    "preview:client": "npm run preview -w client",
+    "typecheck": "npm run typecheck -w shared && npm run typecheck -w server && npm run typecheck -w client",
+    "mobile:sync": "npm run build -w client && cap sync",
+    "mobile:open:android": "cap open android",
+    "mobile:open:ios": "cap open ios"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.6.3"
+  }
+}

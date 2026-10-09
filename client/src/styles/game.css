@@ -1,0 +1,149 @@
+.game {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+.game-topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: var(--color-panel);
+  border-bottom: 1px solid var(--color-border);
+  gap: 8px;
+}
+
+.game-topbar-left, .game-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.turn-info {
+  font-size: 13px;
+}
+
+.turn-info b {
+  color: var(--color-gold);
+}
+
+.game-main {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+  position: relative;
+}
+
+.game-board-wrap {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  min-width: 0;
+  background: radial-gradient(circle at 50% 50%, #0a1a3a 0%, #050a20 80%);
+  padding: 4px;
+}
+
+.game-sidebar {
+  flex: 0 0 260px;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-panel);
+  border-left: 1px solid var(--color-border);
+  min-height: 0;
+}
+
+.game-sidebar-section {
+  border-bottom: 1px solid var(--color-border);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+}
+
+/* 日志区：允许收缩并在内部滚动 */
+.game-sidebar-section.log-section {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.game-sidebar-section h4 {
+  margin: 0 0 4px 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.log-box {
+  flex: 1;
+  overflow-y: auto;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+}
+
+.log-entry {
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.log-entry.me { color: var(--color-text); }
+.log-entry.system { color: var(--color-gold); }
+
+/* 横向布局适配：窄屏切换为竖向 */
+@media (max-width: 768px) {
+  .game-main { flex-direction: column; }
+  .game-sidebar {
+    flex: 0 0 200px;
+    border-left: none;
+    border-top: 1px solid var(--color-border);
+    flex-direction: row;
+    overflow-x: auto;
+  }
+  .game-sidebar-section {
+    border-bottom: none;
+    border-right: 1px solid var(--color-border);
+    min-width: 200px;
+  }
+}
+
+/* ---- 可选动作面板（站点/建筑的主动行为） ---- */
+.option-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.option-btn {
+  background: rgba(245, 184, 0, 0.12);
+  border: 1px solid var(--color-accent, #f5b800);
+  color: var(--color-accent, #f5b800);
+}
+
+.option-btn:hover:not(:disabled) {
+  background: rgba(245, 184, 0, 0.24);
+}
+
+.option-list button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.option-reason {
+  font-size: 10px;
+  opacity: 0.75;
+  margin-left: 2px;
+}

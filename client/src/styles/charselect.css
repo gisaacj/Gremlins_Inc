@@ -1,0 +1,130 @@
+.char-select {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 12px;
+  gap: 12px;
+}
+
+.char-select-header {
+  background: var(--color-panel);
+  padding: 12px;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.char-select-header h2 {
+  margin: 0 0 4px 0;
+  font-size: 18px;
+}
+
+.char-select-header p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.char-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.char-card {
+  background: var(--color-panel);
+  border: 2px solid var(--color-border);
+  border-radius: 8px;
+  padding: 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.char-card:hover:not(.disabled) {
+  border-color: var(--color-accent);
+  transform: translateY(-2px);
+}
+
+.char-card.selected {
+  border-color: var(--color-success);
+  background: rgba(46, 204, 113, 0.1);
+}
+
+.char-card.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.char-order {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-weight: bold;
+}
+
+.char-name {
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.char-cn {
+  font-size: 13px;
+  color: var(--color-gold);
+}
+
+.char-building {
+  font-size: 11px;
+  color: var(--color-vote);
+  margin-bottom: 2px;
+}
+
+.char-abilities {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+
+.char-ability-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--color-bg-2);
+  border-radius: 4px;
+  border-left: 3px solid var(--color-border);
+}
+
+.char-ability-name {
+  font-size: 12px;
+  font-weight: bold;
+  color: var(--color-gold);
+}
+
+.char-ability-desc {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.char-owner {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: var(--color-bg-2);
+  border-radius: 4px;
+  text-align: center;
+}
+
+.char-select-footer {
+  display: flex;
+  gap: 8px;
+}
+
+.char-select-footer button {
+  flex: 1;
+}

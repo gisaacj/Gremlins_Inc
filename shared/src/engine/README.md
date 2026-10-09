@@ -318,7 +318,27 @@ const suspicious = inBranch.filter((t) => t !== 'ROLL');   // 有就报错
 
 查规则时先在文案表里搜关键词，往往能找到比 `text.description` 更完整的版本。
 
-**21. 岔路口必须由玩家选路**
+**21. 落点也会挂起——调用方要区分"岔路"和"落点决策"**
+
+`startMove` 不只是"走完就返回"：停在警察格时会挂起
+`police:<playerId>`（付贿赂 or 掷骰）。这时 `moveCursor` **已经被清空**
+（落点结算在游标清理之后），所以**不能**再用 `startMove` 重入。
+
+调用方必须按 kind 分流：
+
+```ts
+if (pending.kind.startsWith('moveBranch:')) {
+  startMove(state, id, cardId, { [pending.kind]: pick });   // 岔路：续跑移动
+} else {
+  resolvePending(state, pending.playerId, pick);            // 落点决策
+}
+```
+
+服务端的 `game:choose` 天然走 `resolvePending`，所以不受影响；
+但**测试驱动和 AI 循环**要自己注意（`playthrough.ts` 曾因此报
+6 次"没有进行中的移动"）。
+
+**22. 岔路口必须由玩家选路**
 
 真实地图**不是单环，而是分支图**。普通地图 67 格的出度分布：
 

@@ -140,7 +140,9 @@ function takeTurn(s: EngineState): void {
   const moveCard = playable[0];
   if (moveCard) {
     moveActions++;
-    // 移动可能因岔路口多次挂起，逐次应答直到走完
+    // 移动可能因岔路口多次挂起，逐次应答直到走完。
+    // 注意：落点也可能挂起（警察格的"付贿赂/掷骰"），那类要走 resolvePending，
+    // 不能一律用 startMove 重入——否则会报"没有进行中的移动"。
     let r = startMove(s, p.id, moveCard);
     let g3 = 0;
     while (r.pending && g3++ < 40) {
@@ -149,7 +151,13 @@ function takeTurn(s: EngineState): void {
       const pending = r.pending;
       const pick = pending.options.slice(0, Math.max(1, pending.min ?? 1)).map((o) => o.value);
       if (!pick.length) break;
-      r = startMove(s, p.id, moveCard, { [pending.kind]: pick });
+      if (pending.kind.startsWith('moveBranch:')) {
+        r = startMove(s, p.id, moveCard, { [pending.kind]: pick });
+      } else {
+        const rr = resolvePending(s, pending.playerId, pick);
+        if (!rr.ok) { errors.push(`resolvePending(移动落点) 失败: ${rr.reason}`); }
+        r = { ok: rr.ok, pending: rr.pending };
+      }
     }
     if (!r.ok) { errors.push(`startMove: ${r.reason}`); bump(moveFailReasons, `引擎拒绝: ${r.reason}`); }
   }

@@ -63,7 +63,13 @@ type ResKey = 'money' | 'vote' | 'malice' | 'score' | 'income' | 'term';
 
 /** 一条永久卡触发规格 */
 export interface TriggerSpec {
-  event: TriggerEvent;
+  /**
+   * 触发事件。可以是数组——同一张卡可能挂在多个时机上，
+   * 例如「借口编造器」(`Perm_BribeSkip`) 同时作用于**贿赂格**与**警察格**：
+   *   "50% chance to avoid ~ on Bribe spots.
+   *    50% chance to avoid ~ on Police spots (when you choose to pay ~ there)."
+   */
+  event: TriggerEvent | TriggerEvent[];
   /** 受益者 / 承受者 */
   who: 'holder' | 'other' | 'allPlayers';
   key?: ResKey;
@@ -119,7 +125,8 @@ export const PERM_TRIGGERS: Record<string, TriggerSpec | TriggerSpec[]> = {
   Perm_JailMoney: { event: 'ownTurnStart', who: 'holder', flag: 'jailStipend' },
 
   // ---- 贿赂规避 ----
-  Perm_BribeSkip: { event: 'bribeSpot', who: 'holder', flag: 'chanceSkip' },
+  // 「借口编造器」同时作用于贿赂格与警察格（英文原文明确，中文漏译了后者）
+  Perm_BribeSkip: { event: ['bribeSpot', 'policePayBribe'], who: 'holder', flag: 'chanceSkip' },
 
   // ---- 交锋 ----
   Perm_Conflict: { event: 'playerConflict', who: 'holder', key: 'score', fromParam: 0 },
@@ -160,7 +167,8 @@ export function collectTriggers(state: EngineState, event: TriggerEvent): Trigge
         const raw = PERM_TRIGGERS[action.type as string];
         if (!raw) continue;
         for (const spec of Array.isArray(raw) ? raw : [raw]) {
-          if (spec.event !== event) continue;
+          const evs = Array.isArray(spec.event) ? spec.event : [spec.event];
+          if (!evs.includes(event)) continue;
           const slots = parseParams(action.params);
           out.push({
             spec,

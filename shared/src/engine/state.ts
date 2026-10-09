@@ -343,7 +343,14 @@ export function startMove(
   fireAbility(state, p.id, 'afterMove', { steps: path.length, cellId: p.cellId });
 
   resolvePassThrough(state, p, path, mvFlags);
-  if (!p.flags['ignoreCell']) resolveLanding(state, p);
+  if (!p.flags['ignoreCell']) {
+    // 警察格会挂起"付贿赂 / 掷骰"二选一；其余格同步结算
+    const pending = resolveLanding(state, p);
+    if (pending) {
+      state.pending = pending;
+      return { ok: true, path, pending };
+    }
+  }
 
   return { ok: true, path };
 }
@@ -473,6 +480,35 @@ export function resolvePending(
     return resolveMoveBranch(state, playerId, answer[0]);
   }
 
+  // 警察格：付贿赂 or 掷骰（不走动作解释器）
+  if (pending.kind.startsWith('police:')) {
+    const pid = pending.kind.slice('police:'.length);
+    const actor = getPlayer(state, pid);
+    state.pending = undefined;
+    if (!actor) return { ok: false, reason: '玩家不存在' };
+    const cost = Number(state.pendingInput?.[pending.kind] ?? 0);
+    if ((answer[0] ?? '') === 'pay' && cost > 0) {
+      // 永久卡可规避（「借口生成器」：付警察格贿赂时 50% 机会免除）
+      const flags: Record<string, string | number | boolean> = {};
+      fireTrigger(state, 'policePayBribe', { actorId: actor.id, flags });
+      if (flags.bribeSkipped) {
+        pushLog(state, actor.id, `警察格：永久卡效果免付贿赂 ${cost} 金钱`);
+      } else {
+        addRes(actor, 'money', -cost);
+        pushLog(state, actor.id, `警察格：支付贿赂 ${cost} 金钱，安全通过`);
+      }
+      delete state.pendingInput?.[pending.kind];
+      return { ok: true };
+    }
+    // 掷骰
+    const dice = rollDice(state);
+    state.lastRoll = dice;
+    pushLog(state, actor.id, `警察格掷骰 ${dice}${dice === 1 ? ' —— 被逮捕！' : ' —— 安全'}`);
+    if (dice === 1) arrest(state, actor, '警察格掷出 1');
+    delete state.pendingInput?.[pending.kind];
+    return { ok: true };
+  }
+
   // 玩家交锋：两方逐个出价，收齐后结算（不走动作解释器）
   if (pending.kind.startsWith('conflict:')) {
     state.pending = undefined;
@@ -578,8 +614,11 @@ function resolvePassThrough(
   }
 }
 
-/** 落点结算：站点效果 / 建筑可打牌 */
-function resolveLanding(state: EngineState, p: EnginePlayer): void {
+/** 落点结算：站点效果 / 建筑可打牌
+ *
+ * @returns 需要玩家决策时返回挂起项（目前只有警察格），否则 undefined
+ */
+function resolveLanding(state: EngineState, p: EnginePlayer): PendingChoice | undefined {
   const cell = getCell(state, p.cellId);
   if (!cell) return;
   const cellType = cellTypeOf(cell);
@@ -628,10 +667,35 @@ function resolveLanding(state: EngineState, p: EnginePlayer): void {
         pushLog(state, p.id, '镇长经过警察格无需掷骰');
         break;
       }
-      const dice = rollDice(state);
-      pushLog(state, p.id, `警察格掷骰 ${dice}${dice === 1 ? ' —— 被逮捕！' : ' —— 安全'}`);
-      if (dice === 1) arrest(state, p, '警察格掷出 1');
-      break;
+      // 原版：警察格是**二选一** ——
+      //   「Whenever you stop on the Police spot, you must either roll the dice
+      //     - or pay ~ to avoid the risk of getting arrested.」
+      // 若付不起贿赂，则只剩掷骰一条路（不给无意义的选项）。
+      const cost = policeBribe(state, p);
+      const canPay = cost > 0 && p.res.money >= cost;
+      if (!canPay) {
+        const dice = rollDice(state);
+        state.lastRoll = dice;
+        pushLog(state, p.id,
+          `警察格：付不起贿赂（需 ${cost} 金钱）→ 只能掷骰 ${dice}${dice === 1 ? ' —— 被逮捕！' : ' —— 安全'}`);
+        if (dice === 1) arrest(state, p, '警察格掷出 1');
+        break;
+      }
+      // 挂起让玩家选；答案由 resolvePending 里的 `police:` 分支处理
+      state.pendingInput = { ...(state.pendingInput ?? {}), [`police:${p.id}`]: String(cost) };
+      pushLog(state, p.id, `警察格：可掷骰赌运气，或付 ${cost} 金钱贿赂免于被捕`);
+      return {
+        kind: `police:${p.id}`,
+        playerId: p.id,
+        prompt: `警察格：掷骰赌运气，还是付 ${cost} 金钱贿赂？`,
+        options: [
+          { value: 'pay', label: `付 ${cost} 金钱贿赂（安全，但可能被永久卡拦下）` },
+          { value: 'roll', label: '掷骰子（掷出 1 则被捕）' },
+        ],
+        min: 1,
+        max: 1,
+        resume: { actions: [], index: 0, targets: [p.id], source: '警察格', ownerId: p.id },
+      };
     }
     case 'Risk': {
       pushLog(state, p.id, `冒险格（可购买保险，费用 ${cellType.params[1] ?? 40}）`);
@@ -930,6 +994,16 @@ function settleConflict(
 
 function drawMisfortuneFor(state: EngineState, p: EnginePlayer): void {
   drawMisfortune(state, p);
+}
+
+/**
+ * 警察格要付的贿赂。
+ *
+ * 原版文案只说 "pay ~"（贿赂），没有说双倍——双倍只出现在**停留贿赂格**。
+ * 所以警察格用**单倍**贿赂值（`$20 + 罪恶`，受角色修正影响）。
+ */
+function policeBribe(state: EngineState, p: EnginePlayer): number {
+  return bribeAmount(state, p);
 }
 
 /** 贿赂金额：原版为 20 + 罪恶值，叠加永久卡加成与角色能力修正 */

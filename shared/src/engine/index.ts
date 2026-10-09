@@ -20,6 +20,7 @@ export * from './model.js';
 export * from './resources.js';
 export * from './permanents.js';
 export * from './abilities.js';
+export * from './dialog.js';
 export * from './options.js';
 export * from './interp.js';
 export * from './state.js';

@@ -17,6 +17,7 @@ import {
 } from './model.js';
 import { fireTrigger as firePermTrigger } from './permanents.js';
 import { fireAbility } from './abilities.js';
+import { collectButtons } from './dialog.js';
 import { jailTermFor } from './options.js';
 import {
   addRes, firstId, firstNumber, hasTag, parseParams, payAmount, transferRes,
@@ -126,6 +127,24 @@ const takeChoice = (ctx: ActionContext, kind: string): string[] | undefined => {
   return c && c.length ? c : undefined;
 };
 
+/**
+ * 已消费的 `BUTTON` 下标集合。
+ *
+ * 存在 `ctx.scratch` 里（scratch 是 `Record<string, string>`，所以用逗号分隔的字符串），
+ * 并且会被 `makePending` 快照进 resume —— 这样挂起期间也不会丢。
+ *
+ * @param write 传了就把这份集合写回 ctx.scratch
+ */
+function consumedButtons(ctx: ActionContext, write?: Set<number>): Set<number> {
+  if (write) {
+    ctx.scratch = { ...ctx.scratch, __buttons: [...write].join(',') };
+    return write;
+  }
+  const raw = ctx.scratch?.['__buttons'];
+  if (!raw) return new Set<number>();
+  return new Set(raw.split(',').filter(Boolean).map(Number));
+}
+
 // ---------------------------------------------------------------- 随机
 /** 可复现的 LCG */
 export function random(state: EngineState): number {
@@ -218,13 +237,17 @@ export function drawMisfortune(state: EngineState, p: EnginePlayer): void {
   state.discard.push(id);
   log(state, p.id, `厄运「${card?.text.name ?? id}」：${card?.text.description ?? ''}`);
   if (card?.actions?.length) {
-    runActions(state, {
+    const r = runActions(state, {
       actions: card.actions,
       index: 0,
       targets: [p.id],
       ownerId: p.id,
       source: `厄运「${card.text.name}」`,
     });
+    // 厄运牌里也会有需要玩家决策的动作（`BUTTON` 二选一、`SelectOpponent` 选人…）。
+    // 之前这里丢掉了返回值，挂起状态没写回 state.pending，
+    // 于是这些决策被静默跳过——厄运牌只结算了"默认分支"。
+    if (r.status === 'pending') state.pending = r.pending;
   }
 }
 
@@ -288,6 +311,49 @@ function execAction(
       const chosen = takeChoice(ctx, type);
       if (chosen) applyChoice(state, ctx, type, chosen);
       return handleSelect(state, ctx, type, slots);
+    }
+
+    // ============ 二选一（对话框按钮） ============
+    // 一张牌用两个 `BUTTON` 表达"两害取其轻"，各带一条分支动作序列。
+    // 玩家点哪个按钮就走哪条分支。
+    //
+    // 「按组处理」是关键：两个 BUTTON 与它们的分支**共用一条动作列表**，
+    // 所以选完分支 0 之后，主循环会继续走到分支 1 的动作。之前只在 BUTTON
+    // 处 return undefined，结果**两条分支都执行了**（选钱还扣齿轮）。
+    // 因此这里一次性推进整组：执行选中分支，然后直接跳到组末尾。
+    case 'BUTTON': {
+      const buttons = collectButtons(ctx.actions);
+      if (buttons.length < 2) return undefined; // 结构不完整就跳过，不卡住
+
+      const groupEnd = buttons[buttons.length - 1].branchEnd;
+      const consumed = consumedButtons(ctx);
+
+      // 本组已处理过 → 直接跳到组末尾（不再重复执行任何分支）
+      if ([...consumed].some((i) => buttons.some((b) => b.branchStart - 1 === i))) {
+        ctx.index = groupEnd - 1;
+        return undefined;
+      }
+
+      const key = `BUTTON:${ctx.index}`;
+      const chosen = takeChoice(ctx, key);
+      if (!chosen) {
+        return makePending(ctx, key, '选择一个结果', buttons.map((b, k) => ({
+          value: String(k),
+          label: b.label,
+        })));
+      }
+
+      const pick = buttons.find((b) => b.label === chosen[0]) ?? buttons[Number(chosen[0])];
+      // 用子上下文只跑选中的分支，避免主循环顺带跑掉另一条分支
+      if (pick) {
+        const sub: ActionContext = { ...ctx, actions: pick.actions, index: 0 };
+        const r = runActions(state, sub);
+        if (r.status === 'pending') return r;
+      }
+      consumed.add(ctx.index);
+      consumedButtons(ctx, consumed);
+      ctx.index = groupEnd - 1;
+      return undefined;
     }
 
     // ============ 作用域（不挂起，只改 targets） ============
@@ -795,7 +861,10 @@ function handleResourceLoss(
       }
 
       case 'OpponentLoseMoney': {
-        const r = payAmount(tgt, o, slots, { defaultKey: 'money' });
+        // 「失去」不是「支付」：钱不进任何人口袋，直接蒸发。
+        // 之前把 payee 传成 ctx 的 owner —— 而厄运牌的 ownerId/targets 都是自己，
+        // 于是 transferRes 把钱"转给自己"，净变化为 0（`-{1}$` 分支完全没生效）。
+        const r = payAmount(tgt, undefined, slots, { defaultKey: 'money' });
         log(state, tgt.id, `${nameOf(tgt)} 失去 ${r.paid} ${RES_LABEL[r.key]}`);
         if (!r.full && hasTag(slots, 'Arrest')) arrest(state, tgt, `${ctx.source}：无力足额支付`);
         break;

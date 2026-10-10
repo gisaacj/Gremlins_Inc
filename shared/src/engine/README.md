@@ -481,9 +481,19 @@ AI 策略在 [ai.ts](ai.ts)，服务端与单机共用同一份，避免两套�
 
 ```bash
 # 引擎（在 server 下跑，测试文件在 server/src/__tests__）
-npx tsx server/src/__tests__/engine.test.ts            # 引擎 24 项
+npx tsx server/src/__tests__/engine.test.ts            # 引擎 26 项
 npx tsx server/src/__tests__/permanents.test.ts        # 永久卡 26 项
 npx tsx server/src/__tests__/abilities.test.ts         # 角色能力 34 项
+npx tsx server/src/__tests__/options.test.ts           # 可选动作 24 项
+npx tsx server/src/__tests__/dice-tables.test.ts       # 骰子表 35 项
+npx tsx server/src/__tests__/buttons.test.ts           # 对话框按钮 25 项
+npx tsx server/src/__tests__/primitives.test.ts        # 交互型原语 14 项
+npx tsx server/src/__tests__/coverage.test.ts          # 原语覆盖度 6 项
+npx tsx server/src/__tests__/conflict.test.ts          # 玩家交锋 18 项
+npx tsx server/src/__tests__/escape.test.ts            # 摇尾巴 14 项
+npx tsx server/src/__tests__/police.test.ts            # 警察格 12 项
+npx tsx server/src/__tests__/chaos.test.ts             # 混沌卡 26 项
+npx tsx server/src/__tests__/ai-chaos.test.ts          # AI 混沌卡 15 项
 npx tsx server/src/__tests__/local-game.test.ts        # 单机对局 11 项
 npx tsx server/src/__tests__/server-integration.test.ts # 服务端集成 18 项
 npx tsx server/src/__tests__/playthrough.ts 30         # 30 回合自动对局
@@ -493,8 +503,10 @@ node test/tools/smoke-gamedata.mjs      # 23 项
 node test/tools/smoke-board-view.mjs    # 19 项
 
 # 端到端（需服务端已启动）
-node test/tools/e2e-socket.mjs http://127.0.0.1:3000 8000   # 14 项
+node test/tools/e2e-socket.mjs http://127.0.0.1:3000 8000   # 19 项
 ```
+
+合计：**引擎类 304 项** + 数据/棋盘 42 项 + 端到端 19 项。
 
 各测试的重点：
 
@@ -510,23 +522,34 @@ node test/tools/e2e-socket.mjs http://127.0.0.1:3000 8000   # 14 项
 | 类别 | 状态 |
 |---|---|
 | 目标选择（`Select*`）、作用域、资源增减与转移 | ✅ |
-| 移动（真实邻接 + 岔路选路）、传送、反向移动 | ✅ |
+| 移动（真实邻接 + 岔路选路）、传送、反向移动、**移动不花资源** | ✅ |
 | 回合流程、选举、逮捕/释放/刑期/服刑回合、监狱卡 | ✅ |
-| 永久卡 `Perm_*`（33 种 + 28 个事件点） | ✅ |
+| 永久卡 `Perm_*`（33 种 + 28 个事件点，数据里 34 张永久卡） | ✅ |
 | 角色能力（49 种，数据驱动） | ✅ |
+| 全部 143 种 `ActionType`（`coverage.test.ts` 守着"无空实现"） | ✅ |
+| `BUTTON` 二选一（按组处理）、`Auction` / `CompareResource` / `TopStatBonus` | ✅ |
+| 玩家交锋（竞价 / 平局比罪恶 / `Conflict*` 统计） | ✅ |
+| 「摇尾巴」逃避交锋 | ✅ |
+| 警察格「掷骰 or 付贿赂」二选一 | ✅ |
+| 混沌卡（共享池 / 地点限定 / 一次性 / 结束时机） | ✅ |
+| 站点可选动作的**每次到访一次**限制 | ✅ |
 | 服务端接入（rooms / ai / 协议）+ 单机模式 | ✅ |
-| 可选动作的交互流程（办公楼再打一张、冒险格弃牌、卖收入） | 🔶 规则已登记，缺 UI 交互 |
-| `BUTTON`（对话框确认，厄运牌高频） | 🔶 非阻塞 |
-| `Auction` / `CompareResource` 等交互型原语 | 🔶 |
-| 混沌卡触发时机（事件卡，不在手牌） | 🔶 待设计 |
+| AI（出牌 / 移动 / 可选动作 / 混沌卡财力规划） | ✅ |
+| 可选动作的 UI 交互（办公楼再打一张、冒险格弃牌、卖收入） | 🔶 引擎支持，UI 待补 |
+| 对局长度 / AI 得分策略 | ⚠️ 需改进（见 `待办事项.md` P0-1） |
+| 移动端真机验证 | ❌ 未做 |
 
-未实现的 `ActionType` 会在日志里留下「效果「X」尚未实现」，
-便于按实际对局暴露的频次排优先级，而不是盲目铺满 143 种。
+未实现的 `ActionType` 会在日志里留下「效果「X」尚未实现」。
+目前该日志**在对局模拟中已不再出现**。
 
 ## 下一步
 
-1. **可选动作的交互流程**：停在办公楼再打一张、冒险格弃牌、卖收入、收入格二选一
-2. `BUTTON` / `Auction` / `CompareResource` 等交互型原语
-3. 移动端：Capacitor 打包链路未受影响，但需真机验证本轮协议变更
-4. 客户端包体：引擎进客户端后 gzip 约 150 KB，若需优化可把
-   `gamedata` 改为运行时按需加载 JSON
+优先级见根目录 [`待办事项.md`](../../../待办事项.md)。要点：
+
+1. **对局长度**：修掉移动扣费后 AI 仍要 580+ 回合才到 30 齿轮，
+   且得分主要靠选举（每 20 回合 +1 齿轮）。怀疑 AI 的**得分为主策略**太弱
+2. **移动端真机验证**：协议已多轮变更（`game:play_chaos`、`player.conflicts` 等）
+3. **规则待核**：贿赂付不全的后果、`MoneyRoll`、`MaxResultValue`、
+   摇尾巴后是否抽厄运
+4. 客户端包体：引擎进客户端后 gzip 约 **220 KB**
+

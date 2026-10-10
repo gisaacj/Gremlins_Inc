@@ -803,18 +803,21 @@ function execAction(
     }
 
     case 'Move_Back': {
+      // ⚠️ 这不是"向后退 N 步"的动作，而是 a031「作弊！」用来声明
+      // **本牌的移动可以逆行（逆时针走）** 的标记。
+      //
+      // 原版卡面（英文）："You can move **against the arrows** when you use
+      // this card to move."
+      //
+      // 早先这里真的把玩家沿 `in[0]` 倒退 `lastMoveSteps` 步，结果
+      // 「先向前走 2 步、再退回来」＝净位移 0 —— 用户报的 bug #3
+      // "作弊这张牌的移动不符合预期"。
+      //
+      // 真正的逆行由移动引擎负责：`isReverseMoveCard()` 认得这个动作，
+      // `startMove` 会据此沿 `cell.in` 走。这里只做标记，不改变位置。
       const o = owner(state, ctx);
-      const steps = firstNumber(slots, o.lastMoveSteps) || o.lastMoveSteps || 1;
-      let cur = getCell(state, o.cellId);
-      for (let i = 0; i < steps && cur; i++) {
-        const prev = cur.in[0];
-        if (!prev) break;
-        cur = getCell(state, prev);
-      }
-      if (cur) {
-        o.cellId = cur.id;
-        log(state, o.id, `反向移动 ${steps} 步到 ${cellLabel(cur)}`);
-      }
+      o.flags['reverseMove'] = 1;
+      log(state, o.id, `${ctx.source}：本牌可以逆行（沿箭头反方向移动）`);
       return undefined;
     }
 
@@ -904,11 +907,42 @@ function execAction(
       return undefined;
     }
     case 'WindOfChanges': {
-      for (const p of state.players) {
-        state.discard.push(...p.hand.splice(0));
-        drawTo(state, p, 6);
+      // m015「不测风云」原文：
+      //   「每个玩家将 {1} 张手牌传给下一个玩家。」（`params[0]` = 2）
+      //
+      // ⚠️ 早先这里**完全忽略参数**，把所有人的手牌全丢进弃牌堆再各抽 6 张 ——
+      // 效果从"每人传 2 张"变成了"全体换一手牌"，用户报的 bug #5。
+      //
+      // 实现要点：
+      //  - **同时结算**：先按"传牌前"的手牌各取出 N 张，再一起发给下一位，
+      //    否则玩家 A 收到的牌会被算进 A 要传出的牌里，越传越乱。
+      //  - "下一个玩家"按**座位顺序**（`state.players` 已按原版行动顺序排好）。
+      //  - 手牌不足 N 张的玩家按实际持有量传（不会凭空造牌）。
+      //  - 卡面没写让玩家挑牌，所以取**随机** N 张。
+      const n = firstNumber(slots, 2) || 2;
+      const order = state.players;
+      if (order.length < 2) return undefined;
+
+      const outgoing = new Map<string, string[]>();
+      for (const p of order) {
+        const picked: string[] = [];
+        for (let i = 0; i < n && p.hand.length > 0; i++) {
+          const idx = Math.floor(random(state) * p.hand.length) % p.hand.length;
+          picked.push(p.hand.splice(idx, 1)[0]!);
+        }
+        outgoing.set(p.id, picked);
       }
-      log(state, ctx.ownerId, '风向变了：全体更换手牌');
+      // 传给下一位
+      for (let i = 0; i < order.length; i++) {
+        const from = order[i]!;
+        const to = order[(i + 1) % order.length]!;
+        const cards = outgoing.get(from.id) ?? [];
+        to.hand.push(...cards);
+      }
+      const detail = order
+        .map((p) => `${p.name} 传出 ${(outgoing.get(p.id) ?? []).length} 张`)
+        .join('，');
+      log(state, ctx.ownerId, `不测风云：每个玩家向下一家传 ${n} 张手牌（${detail}）`);
       return undefined;
     }
 

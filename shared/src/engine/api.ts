@@ -19,7 +19,7 @@ import { addRes } from './resources.js';
 import { runActions } from './interp.js';
 import { rollDice, drawTo } from './interp.js';
 import { availableOptions, doOption, type OptionSpec } from './options.js';
-import { isDiscardMoveCard } from '../board-view.js';
+import { isDiscardMoveCard, isReverseMoveCard } from '../board-view.js';
 
 export type { EngineInitArgs };
 
@@ -90,7 +90,7 @@ export function hasPending(state: EngineState): boolean {
 
 // ---------------------------------------------------------------- 移动
 /** 从 from 到 dest 的一条最短路径（沿 out 边），找不到返回 undefined */
-function pathTo(state: EngineState, from: string, dest: string): string[] | undefined {
+function pathTo(state: EngineState, from: string, dest: string, reverse = false): string[] | undefined {
   if (from === dest) return [];
   const prev = new Map<string, string>();
   const seen = new Set([from]);
@@ -100,7 +100,8 @@ function pathTo(state: EngineState, from: string, dest: string): string[] | unde
     for (const id of frontier) {
       const cell = getCell(state, id);
       if (!cell) continue;
-      for (const nb of cell.out) {
+      // 逆行牌沿 `in` 走，与 startMove 的实际方向保持一致
+      for (const nb of (reverse ? cell.in : cell.out)) {
         if (seen.has(nb) || !getCell(state, nb)) continue;
         seen.add(nb);
         prev.set(nb, id);
@@ -282,9 +283,12 @@ function autoPickBranch(
   const stepsTaken = cursor.path.length;
   const stepsLeft = cursor.stepsLeft;
 
+  // 与 startMove 用同一个方向判据，避免出现「预览能走、引擎走不动」
+  const reverse = isReverseMoveCard(cardId);
+
   const viable: string[] = [];
   for (const c of candidates) {
-    const rest = pathTo(state, c, destination);
+    const rest = pathTo(state, c, destination, reverse);
     if (!rest) continue;
     // 该候选能否在剩余步数内到达目的地（含"提前停在目的地"的情形）
     if (rest.length <= stepsLeft) viable.push(c);
@@ -293,11 +297,11 @@ function autoPickBranch(
   if (viable.length > 1) {
     // 多个候选都能到目的地：选距离最短的那个（唯一最短时才算确定）
     const ranked = viable
-      .map((c) => ({ c, d: pathTo(state, c, destination)!.length }))
+      .map((c) => ({ c, d: pathTo(state, c, destination, reverse)!.length }))
       .sort((a, b) => a.d - b.d);
     if (ranked.length === 1 || ranked[0].d < ranked[1].d) return ranked[0].c;
   }
-  void stepsTaken; void playerId; void cardId; void totalSteps;
+  void stepsTaken; void playerId; void totalSteps;
   return undefined;
 }
 

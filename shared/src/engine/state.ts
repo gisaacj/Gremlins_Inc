@@ -382,6 +382,16 @@ export function startMove(
   const cursor = state.moveCursor;
   if (!cursor) return { ok: false, reason: '没有进行中的移动' };
 
+  // 本牌是否允许**逆行**（沿箭头反方向走）。
+  //
+  // a031「作弊！」的原版效果："You can move **against the arrows** when you
+  // use this card to move."（`isReverseMoveCard` 通过它的 `Move_Back` 动作识别）
+  //
+  // ⚠️ 早先只有**预览**支持逆行（`computeReachableTiles(..., reverse)`），
+  // 引擎却永远沿 `cell.out` 走 —— 于是预览里能选的逆行路线，确认后走到别处
+  // 或走不动（用户 bug #3）。现在引擎按同一份 `findPathTo` 走 `cell.in`。
+  const reverseMove = isReverseMoveCard(cardId);
+
   // ── 有预定路径：按它走，不问路口 ──
   if (cursor.plannedPath?.length) {
     const planned = cursor.plannedPath;
@@ -408,7 +418,9 @@ export function startMove(
     }
     const cur = getCell(state, p.cellId);
     if (!cur) break;
-    const outs = cur.out.filter((id) => !!getCell(state, id));
+    // 逆行牌沿 `in` 走，普通牌沿 `out` 走（与预览的 `reverse` 参数一致）
+    const edges = reverseMove ? cur.in : cur.out;
+    const outs = edges.filter((id) => !!getCell(state, id));
     if (!outs.length) break;
 
     if (outs.length === 1) {

@@ -26,8 +26,15 @@ const CWD = arg('cwd', process.cwd());
 if (!TOKEN) throw new Error('缺少 --token');
 
 const API = 'https://api.github.com';
+/**
+ * 认证头。
+ *  - 经典 PAT（`ghp_...`）用 `token <pat>`
+ *  - 细粒度 PAT（`github_pat_...`）用 `Bearer <pat>`
+ * 两种都试过：`Bearer` 对细粒度有效，而经典 PAT 也能接受 `Bearer`，
+ * 所以统一用 `Bearer`。
+ */
 const headers = {
-  Authorization: `token ${TOKEN}`,
+  Authorization: `Bearer ${TOKEN}`,
   Accept: 'application/vnd.github+json',
   'User-Agent': 'dsh-push',
   'Content-Type': 'application/json',
@@ -40,7 +47,21 @@ const api = async (method, path, body) => {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text();
-  if (!res.ok) throw new Error(`${method} ${path} → HTTP ${res.status}\n${text.slice(0, 400)}`);
+  if (!res.ok) {
+    // 细粒度 PAT 最常见的坑：仓库对账号可见、`GET /repos` 也报 permissions.push=true，
+    // 但 token 自身的 "Contents" 权限是只读 → 写操作一律 403
+    // "Resource not accessible by personal access token"。
+    // 去 https://github.com/settings/personal-access-tokens 把 Contents 改成 Read and write。
+    if (res.status === 403 && /Resource not accessible/i.test(text)) {
+      throw new Error(
+        `${method} ${path} → HTTP 403\n`
+        + '细粒度 PAT 缺少写权限。请在 token 设置里把「Contents」改为 '
+        + '"Read and write"（仓库对账号的 permissions.push 不能代表 token 的授权范围）。\n'
+        + text.slice(0, 200),
+      );
+    }
+    throw new Error(`${method} ${path} → HTTP ${res.status}\n${text.slice(0, 400)}`);
+  }
   return text ? JSON.parse(text) : null;
 };
 

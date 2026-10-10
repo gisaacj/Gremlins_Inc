@@ -43,6 +43,14 @@ export interface C2SEvents {
    * `optionId` 来自 `PlayerPrompt.optionalActions`。
    */
   'game:do_option': (payload: { optionId: string; targetId?: string }) => void;
+  /**
+   * 打出一张**混沌卡**（暴乱卡）。
+   *
+   * 混沌卡是**全员共享池**（"available to every player in this session"），
+   * 不在手牌里，只能用于行动、不能移动；每张只能打一次。
+   * 卡池见 `SerializedGameState.chaosPool`。
+   */
+  'game:play_chaos': (payload: { cardId: string; permanentId?: string }) => void;
   /** 结束自己的回合（由玩家显式推进回合） */
   'game:end_turn': () => void;
   /** 狱中服刑：抽一张监狱卡结算 */
@@ -117,6 +125,25 @@ export interface SerializedGameState {
   misfortuneDeckCount: number;
   lastDiceRoll?: number;
   riotCardsEnabled: boolean;
+  /**
+   * 混沌卡（暴乱卡）**共享池**——还没被打出的卡。
+   * 原版规则：全员都能看到并选择打哪张，打一张少一张；
+   * 全部打完 → 该轮结束时赛局结束。
+   */
+  chaosPool: Array<{
+    id: string;
+    name: string;
+    description: string;
+    /** 代价描述（如 "1000 金钱" / "10 选票" / "免费"） */
+    cost: string;
+    /** 收益描述（如 "+12 齿轮，+5 罪恶"） */
+    gain: string;
+    /** 当前视角玩家能否打出，以及不能的原因 */
+    playable: boolean;
+    reason?: string;
+  }>;
+  /** 已打出的混沌卡 id */
+  chaosPlayed: string[];
   /** 当前地图 id（客户端据此选棋盘布局） */
   mapId: string;
 }

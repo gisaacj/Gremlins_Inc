@@ -9,8 +9,9 @@ import type {
   SerializedGameState, SerializedPlayer, PlayerPrompt, GamePatch,
 } from '../protocol.js';
 import type { EngineState, EnginePlayer } from './model.js';
-import { cellLabel, getCell, getMap } from './model.js';
+import { CHAOS_CARDS, cellLabel, getCell, getMap } from './model.js';
 import { availableOptions } from './options.js';
+import { chaosOptions } from './api.js';
 
 /** 引擎回合阶段 → 协议字符串（客户端主要用 prompt，这里只作展示与调试） */
 function phaseOf(state: EngineState): string {
@@ -45,6 +46,21 @@ export function serializeEngineState(state: EngineState, viewerId?: string): Ser
     misfortuneDeckCount: state.misfortuneDeck.length,
     lastDiceRoll: state.lastRoll,
     riotCardsEnabled: state.chaosEnabled,
+    // 混沌卡共享池：附带"该视角玩家能否打出"的判定，客户端直接渲染。
+    // viewerId 缺省时不判定（全部按不可打处理），避免误报可打。
+    chaosPool: chaosOptions(state, viewerId ?? '').map((o) => {
+      const card = CHAOS_CARDS.find((c) => c.id === o.cardId);
+      return {
+        id: o.cardId,
+        name: o.name,
+        description: card?.text.description ?? '',
+        cost: o.cost,
+        gain: o.gain,
+        playable: o.playable,
+        reason: o.reason,
+      };
+    }),
+    chaosPlayed: [...state.chaosPlayed],
     mapId: state.mapId,
   };
 }

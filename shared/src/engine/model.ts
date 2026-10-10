@@ -174,6 +174,26 @@ export interface EngineState {
   discard: string[];
   misfortuneDeck: string[];
   jailDeck: string[];
+  /**
+   * 混沌卡（暴乱卡）**共享池**——还没被打出的卡 id。
+   *
+   * 原版规则：
+   *  - "Chaos Cards are available to every player in this session."
+   *  - "Each of the Chaos Cards can only be played once."
+   *  - "Chaos Cards cannot be used to move around, they can only be played for action."
+   *  - 全部打完 → 该轮结束时赛局结束
+   *
+   * 所以不是各自持有，而是**公开的共享池**（打出一张即从池中移除）。
+   * 关闭 `enableRiotCards` 时为空数组。
+   */
+  chaosPool: string[];
+  /** 已打出的混沌卡 id（用于"全部打完则结束"判定与展示） */
+  chaosPlayed: string[];
+  /**
+   * 混沌卡已打完、等待"该轮结束"时收尾。
+   * 原版：「赛局会在最后一张混沌卡被打出的那一轮结束时结束」。
+   */
+  chaosEndPending?: boolean;
 
   mayorId?: string;
   nextElectionRound: number;

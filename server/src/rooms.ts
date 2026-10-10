@@ -7,7 +7,7 @@ import { DEFAULT_ROOM_CONFIG, CHARACTERS } from '@gremlins/shared';
 import type { EngineState } from '@gremlins/shared/engine';
 import {
   answerChoice, buildEnginePrompt, currentPlayerId, hasPending, isTurn,
-  jailTurn, moveWithCard, newGame, nextTurn, playCard, runOption, serializeEngineState, skipPlay,
+  jailTurn, moveWithCard, newGame, nextTurn, playCard, playChaosCard, runOption, serializeEngineState, skipPlay,
 } from '@gremlins/shared/engine';
 import { runAITurn } from './ai.js';
 import { loggers } from './utils/logger.js';
@@ -377,6 +377,13 @@ export function attachHandlers(io: SServer, socket: SSocket): void {
     log.info('game:do_option id=', payload.optionId, 'target=', payload.targetId);
     runAction('do_option', (_room, state) =>
       runOption(state, socket.id, payload.optionId, payload.targetId));
+  });
+
+  /** 打出混沌卡（暴乱卡，全员共享池） */
+  socket.on('game:play_chaos', (payload) => {
+    log.info('game:play_chaos id=', payload.cardId, 'permanent=', payload.permanentId);
+    runAction('play_chaos', (_room, state) =>
+      playChaosCard(state, socket.id, payload.cardId, { permanentId: payload.permanentId }));
   });
 
   /** 结束自己的回合（由玩家显式推进回合） */

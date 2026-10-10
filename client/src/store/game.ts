@@ -160,6 +160,8 @@ interface GameStore {
   choose: (kind: string, values: string[]) => void;
   /** 执行可选动作（投资、卖选票、打工、赌博…） */
   doOption: (optionId: string, targetId?: string) => void;
+  /** 打出一张混沌卡（暴乱卡，全员共享池；c001 需附 permanentId） */
+  playChaosCard: (cardId: string, permanentId?: string) => void;
   /** 结束自己的回合 */
   endTurn: () => void;
   /** 狱中服刑：抽监狱卡 */
@@ -449,6 +451,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
     log.info(`emit game:do_option id=${optionId} target=${targetId ?? 'none'}`);
     getSocket().emit('game:do_option', { optionId, targetId });
+  },
+
+  /** 打出一张混沌卡（暴乱卡） */
+  playChaosCard: (cardId, permanentId) => {
+    if (get().mode === 'local') {
+      withLocal(get, set, (g) => g.playChaos(MY_ID, cardId, permanentId));
+      return;
+    }
+    log.info(`emit game:play_chaos id=${cardId} permanent=${permanentId ?? 'none'}`);
+    getSocket().emit('game:play_chaos', { cardId, permanentId });
   },
 
   /** 结束自己的回合 */

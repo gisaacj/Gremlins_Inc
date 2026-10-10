@@ -11,8 +11,9 @@
 import type { EngineState, PendingChoice } from './model.js';
 import { getPlayer } from './model.js';
 import {
-  answerChoice, currentPlayerId, hasPending,
-  isTurn, jailTurn, listOptions, moveWithCard, nextTurn, playCard, runOption, skipPlay,
+  answerChoice, chaosOptions, currentPlayerId, hasPending,
+  isTurn, jailTurn, listOptions, moveWithCard, nextTurn, playCard, playChaosCard,
+  runOption, skipPlay,
 } from './api.js';
 import { buildEnginePrompt, serializeEngineState } from './serialize.js';
 import { createState } from './state.js';
@@ -105,6 +106,16 @@ export class LocalGame {
   /** 跳过打牌 */
   skip(playerId: string) {
     return skipPlay(this.state, playerId);
+  }
+
+  /** 打出一张混沌卡（暴乱卡，全员共享池；c001 需传 permanentId） */
+  playChaos(playerId: string, cardId: string, permanentId?: string) {
+    return playChaosCard(this.state, playerId, cardId, { permanentId });
+  }
+
+  /** 当前玩家此刻可打出的混沌卡清单 */
+  chaosOptions(playerId: string) {
+    return chaosOptions(this.state, playerId);
   }
 
   /** 回答挂起决策 */

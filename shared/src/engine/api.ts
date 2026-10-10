@@ -4,14 +4,19 @@
 // 把 `state.ts` / `interp.ts` / `options.ts` 的内部函数收成一个稳定的动作接口，
 // 供 server（socket 处理）、客户端单机与 AI 共用。所有函数都返回统一的 ActionResult。
 // =============================================================
-import type { EngineState, PendingChoice } from './model.js';
-import { CARD_BY_ID, cellLabel, getCell, getMap, getPlayer } from './model.js';
+import type { EnginePlayer, EngineState, PendingChoice, ResourceKey } from './model.js';
+import {
+  CARD_BY_ID, CELL_TYPE_BY_ID, CHAOS_CARDS, cellLabel, getCell, getMap, getPlayer,
+} from './model.js';
 import {
   canAffordCard, canMoveWithCard, canPlayCard, createState, endTurn,
   resolvePending, startMove, takeJailTurn,
 } from './state.js';
 import type { EngineInitArgs } from './state.js';
 import { playEffectCard } from './state.js';
+import { discardPermanent } from './permanents.js';
+import { addRes } from './resources.js';
+import { runActions } from './interp.js';
 import { availableOptions, doOption, type OptionSpec } from './options.js';
 
 export type { EngineInitArgs };
@@ -183,6 +188,173 @@ export function skipPlay(state: EngineState, playerId: string): ActionResult {
   if (!isTurn(state, playerId)) return fail('不是你的回合');
   if (state.pending) return fail('有未完成的决策');
   return ok();
+}
+
+// ---------------------------------------------------------------- 混沌卡
+/** 混沌卡能否打出的原因 */
+export interface ChaosOption {
+  cardId: string;
+  name: string;
+  /** 代价描述 */
+  cost: string;
+  /** 收益描述 */
+  gain: string;
+  playable: boolean;
+  reason?: string;
+}
+
+/** 只用到"价格"的最小形状（混沌卡与行动卡共有） */
+interface PricedCard {
+  price: number;
+  priceType: string;
+}
+
+/** 代价是否付得起 */
+function canAffordChaos(p: EnginePlayer, card: PricedCard): boolean {
+  if (card.price <= 0) return true;
+  const key: ResourceKey = card.priceType === 'Vote' ? 'vote' : 'money';
+  return p.res[key] >= card.price;
+}
+
+/**
+ * 列出该玩家此刻可以打出的混沌卡。
+ *
+ * 原版规则（来自游戏内完整说明）：
+ *  - "Chaos Cards are available to every player in this session."（共享池，人人可选）
+ *  - "Each of the Chaos Cards can only be played once."
+ *  - "Chaos Cards cannot be used to move around, they can only be played for action."
+ *  - 卡牌的 `CellID` 限定可打出的地点
+ */
+export function chaosOptions(state: EngineState, playerId: string): ChaosOption[] {
+  const p = getPlayer(state, playerId);
+  if (!p) return [];
+  const cell = getCell(state, p.cellId);
+  const atTypeId = cell?.cellTypeId ?? '0';
+
+  return state.chaosPool.map((id) => {
+    const card = CHAOS_CARDS.find((c) => c.id === id);
+    if (!card) {
+      return { cardId: id, name: id, cost: '-', gain: '-', playable: false, reason: '卡牌数据缺失' };
+    }
+    const inc = card.income;
+    const gain = formatBundle(inc ?? {});
+    const cost = card.price > 0 ? `${card.price} ${card.priceType === 'Vote' ? '选票' : '金钱'}` : '免费';
+    if (card.cellTypeId && card.cellTypeId !== '0' && card.cellTypeId !== atTypeId) {
+      const need = CELL_TYPE_BY_ID[card.cellTypeId]?.text?.name ?? '特定地点';
+      return { cardId: id, name: card.text.name, cost, gain, playable: false, reason: `需在${need}` };
+    }
+    if (!canAffordChaos(p, card)) {
+      return { cardId: id, name: card.text.name, cost, gain, playable: false, reason: `付不起（需 ${cost}）` };
+    }
+    return { cardId: id, name: card.text.name, cost, gain, playable: true };
+  });
+}
+
+/** 资源包 → 简短中文描述 */
+function formatBundle(b: { score?: number; malice?: number; money?: number; vote?: number; income?: number }): string {
+  const parts: string[] = [];
+  if (b.score) parts.push(`${b.score > 0 ? '+' : ''}${b.score} 齿轮`);
+  if (b.malice) parts.push(`${b.malice > 0 ? '+' : ''}${b.malice} 罪恶`);
+  if (b.money) parts.push(`${b.money > 0 ? '+' : ''}${b.money} 金钱`);
+  if (b.vote) parts.push(`${b.vote > 0 ? '+' : ''}${b.vote} 选票`);
+  if (b.income) parts.push(`${b.income > 0 ? '+' : ''}${b.income} 收入`);
+  return parts.length ? parts.join('，') : '无';
+}
+
+/**
+ * 打出一张混沌卡。
+ *
+ * 从共享池移除、付出代价、结算 `Income`（原版把收益放在 `Income` 字段），
+ * 并执行卡牌的 `actions`（如 c001 的 `SacrificePermanent`）。
+ */
+export function playChaosCard(
+  state: EngineState,
+  playerId: string,
+  cardId: string,
+  opts: { permanentId?: string } = {},
+): ActionResult {
+  const p = getPlayer(state, playerId);
+  if (!p) return fail('玩家不存在');
+  if (!isTurn(state, playerId)) return fail('不是你的回合');
+  if (state.pending) return fail('有未完成的决策');
+  if (!state.chaosPool.includes(cardId)) return fail('该混沌卡已被打出或未启用');
+
+  const card = CHAOS_CARDS.find((c) => c.id === cardId);
+  if (!card) return fail('卡牌不存在');
+
+  // 地点限定
+  const cell = getCell(state, p.cellId);
+  if (card.cellTypeId && card.cellTypeId !== '0' && card.cellTypeId !== cell?.cellTypeId) {
+    const need = CELL_TYPE_BY_ID[card.cellTypeId]?.text?.name ?? '特定地点';
+    return fail(`需在${need}才能打出`);
+  }
+  if (!canAffordChaos(p, card)) return fail(`付不起（需 ${card.price}）`);
+
+  // c001「供奉」要求先丢弃一张激活的永久卡
+  const needsSacrifice = card.actions.some((a) => String(a.type) === 'SacrificePermanent');
+  if (needsSacrifice) {
+    if (!p.permanents.length) return fail('没有可丢弃的永久卡');
+    if (!opts.permanentId) return fail('需要选择要丢弃的永久卡');
+    if (!p.permanents.includes(opts.permanentId)) return fail('该永久卡不在你的激活区');
+  }
+
+  // 代价
+  if (card.price > 0) {
+    const key: ResourceKey = card.priceType === 'Vote' ? 'vote' : 'money';
+    addRes(p, key, -card.price);
+  }
+  // 从共享池移除
+  state.chaosPool = state.chaosPool.filter((x) => x !== cardId);
+  state.chaosPlayed.push(cardId);
+
+  // 结算收益（原版放在 Income 字段）
+  const inc = card.income ?? {};
+  for (const [k, v] of Object.entries(inc)) {
+    if (typeof v !== 'number' || !v) continue;
+    addRes(p, k as ResourceKey, v);
+  }
+
+  // 卡牌动作（丢弃永久卡等）
+  let pending: PendingChoice | undefined;
+  if (needsSacrifice && opts.permanentId) {
+    discardPermanent(state, p, opts.permanentId, card.text.name);
+  }
+  if (card.actions.length) {
+    const r = runActions(state, {
+      actions: card.actions.filter((a) => String(a.type) !== 'SacrificePermanent'),
+      index: 0,
+      targets: [p.id],
+      ownerId: p.id,
+      source: `混沌卡「${card.text.name}」`,
+      sourceCardId: card.id,
+    });
+    if (r.status === 'pending') {
+      state.pending = r.pending;
+      pending = r.pending;
+    }
+  }
+
+  logChaos(state, p.id,
+    `打出混沌卡「${card.text.name}」：代价 ${card.price > 0 ? `${card.price} ${card.priceType === 'Vote' ? '选票' : '金钱'}` : '免费'}，`
+    + `收益 ${formatBundle(inc)}（剩余混沌卡 ${state.chaosPool.length}）`);
+
+  // 最后一张打完 → 标记"本轮结束时赛局结束"（原版规则），此刻还不结束
+  if (state.chaosEnabled && state.chaosPool.length === 0) {
+    state.chaosEndPending = true;
+    logChaos(state, p.id, '全部混沌卡已打出，本赛局将在本轮结束时结算');
+  }
+
+  return ok(pending);
+}
+
+/** 混沌卡是否已全部打完（原版：该轮结束时赛局结束） */
+export function chaosExhausted(state: EngineState): boolean {
+  return state.chaosEnabled && state.chaosPool.length === 0;
+}
+
+function logChaos(state: EngineState, playerId: string, text: string): void {
+  state.log.push({ round: state.round, playerId, text, ts: Date.now() });
+  if (state.log.length > 400) state.log.shift();
 }
 
 // ---------------------------------------------------------------- 可选动作

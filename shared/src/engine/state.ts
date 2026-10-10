@@ -122,6 +122,9 @@ export function createState(args: EngineInitArgs): EngineState {
     discard: [],
     misfortuneDeck: MISFORTUNE_CARDS.map((c) => c.id),
     jailDeck: JAIL_CARDS.map((c) => c.id),
+    // 混沌卡是**共享池**：全员都能看到并选择打哪张，打一张少一张
+    chaosPool: args.chaosEnabled !== false ? CHAOS_CARDS.map((c) => c.id) : [],
+    chaosPlayed: [],
     mayorId: undefined,
     nextElectionRound: ELECTION_INTERVAL,
     targetScore: args.targetScore ?? 30,
@@ -1162,7 +1165,11 @@ export function endTurn(state: EngineState): void {
   }
 
   // 每轮结束钩子（「古代机构」+齿轮、「末日时钟」每 6 轮扣分等）
-  if (state.currentIndex === 0) fireTrigger(state, 'roundEnd', {});
+  if (state.currentIndex === 0) {
+    fireTrigger(state, 'roundEnd', {});
+    // 混沌卡已打完 → 在本轮结束处收尾（原版规则）
+    finishRoundIfChaosDone(state);
+  }
 
   // 选举检查
   if (state.round >= state.nextElectionRound) runElection(state);
@@ -1177,7 +1184,28 @@ export function checkVictory(state: EngineState): void {
     state.winnerId = winner.id;
     state.phase = 'game_over';
     pushLog(state, winner.id, `${winner.name} 达到 ${state.targetScore} 齿轮，获胜！`);
+    return;
   }
+  // 混沌卡全部打出 → **该轮结束时**赛局结束（不是立刻）。
+  // 原版："The session will end at the end of the round during which the last
+  //        Chaos Card has been played."
+  // 注意：不能用 api.ts 的 chaosExhausted（api → state，会形成循环依赖）。
+  if (state.chaosEnabled && state.chaosPool.length === 0 && state.chaosPlayed.length > 0) {
+    state.chaosEndPending = true;
+  }
+}
+
+/** 一轮结束时调用：若混沌卡已打完，则按齿轮数决出胜者并结束赛局 */
+export function finishRoundIfChaosDone(state: EngineState): void {
+  if (!state.chaosEndPending || state.phase !== 'playing') return;
+  const ranked = [...state.players].sort((a, b) => b.res.score - a.res.score);
+  const top = ranked[0];
+  if (!top) return;
+  state.winnerId = top.id;
+  state.phase = 'game_over';
+  state.chaosEndPending = false;
+  pushLog(state, top.id,
+    `全部混沌卡已打出，本赛局结束：${top.name} 以 ${top.res.score} 齿轮获得最高分`);
 }
 
 // ---------------------------------------------------------------- 角色能力

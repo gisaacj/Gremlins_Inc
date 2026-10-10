@@ -147,3 +147,45 @@
   opacity: 0.75;
   margin-left: 2px;
 }
+
+/* 混沌卡（暴乱卡）：全员共享池，默认折叠以免挤占操作区 */
+.chaos-panel {
+  width: 100%;
+  margin-top: 8px;
+  border: 1px dashed rgba(200, 90, 220, 0.55);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: rgba(200, 90, 220, 0.07);
+}
+
+.chaos-panel > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #d18ae0;
+  user-select: none;
+}
+
+.chaos-panel .option-btn {
+  background: rgba(200, 90, 220, 0.14);
+  border-color: rgba(200, 90, 220, 0.8);
+  color: #e0a8ec;
+}
+
+.chaos-panel .option-btn:hover:not(:disabled) {
+  background: rgba(200, 90, 220, 0.26);
+}
+
+/* 代价 → 收益，窄屏会自动换行 */
+.chaos-cost {
+  font-size: 10px;
+  opacity: 0.8;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .chaos-panel .option-list button {
+    flex: 1 1 100%;
+    text-align: left;
+  }
+}

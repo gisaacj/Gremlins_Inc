@@ -338,7 +338,30 @@ if (pending.kind.startsWith('moveBranch:')) {
 但**测试驱动和 AI 循环**要自己注意（`playthrough.ts` 曾因此报
 6 次"没有进行中的移动"）。
 
-**22. 岔路口必须由玩家选路**
+**22. 混沌卡是共享池，不是手牌**
+
+原版规则（来自游戏内完整说明）：
+
+> Chaos Cards are an **extra feature** … players can play with, or without.
+> Chaos Cards are **available to every player** in this session.
+> Chaos Cards **cannot be used to move** around, they can only be played for action.
+> **Each of the Chaos Cards can only be played once.**
+> The session will end **at the end of the round** during which the last Chaos Card
+> has been played.
+
+所以 `EngineState.chaosPool` 是**公开的共享池**（打一张少一张），不是各自持有。
+DLL 侧也印证：只有 `UseChaosCards` / `SetChaosCards` / `ComCloseChaosCard` +
+`ChaosCardFlag`，**没有逐玩家的混沌卡字段**。
+
+代价按 `PriceType` 从金钱或选票扣；收益放在卡牌的 **`Income`** 字段
+（注意不是 `Outcome`，6 张卡的 `Outcome` 全是 0）。
+
+**结束时机的坑**：`chaosEndPending` 要在**打出最后一张时**就置位，
+不能只在 `checkVictory()` 里判断——因为 `checkVictory` 只在 `endTurn` 末尾跑，
+而"最后一张被打出"发生在回合中间。真正的收尾在
+`finishRoundIfChaosDone()`（`currentIndex === 0` 时调用）。
+
+**23. 岔路口必须由玩家选路**
 
 真实地图**不是单环，而是分支图**。普通地图 67 格的出度分布：
 

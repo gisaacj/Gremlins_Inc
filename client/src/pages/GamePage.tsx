@@ -13,6 +13,7 @@ export function GamePage() {
   const setCardDetail = useGameStore((s) => s.setCardDetail);
   const selectedCardId = useGameStore((s) => s.selectedCardId);
   const playCard = useGameStore((s) => s.playCard);
+  const playChaosCard = useGameStore((s) => s.playChaosCard);
   const skipPlay = useGameStore((s) => s.skipPlay);
   const choose = useGameStore((s) => s.choose);
   const doOption = useGameStore((s) => s.doOption);
@@ -155,6 +156,55 @@ export function GamePage() {
                 </div>
               )}
 
+              {/* 混沌卡（暴乱卡）：**全员共享池**，不在手牌里。
+                  原版规则："available to every player in this session"、
+                  "cannot be used to move around, they can only be played for action"、
+                  "Each of the Chaos Cards can only be played once"。
+                  c001「供奉」需要先选一张要丢弃的永久卡。 */}
+              {prompt.type === 'select_move_card'
+                && (game.chaosPool?.length ?? 0) > 0 && (
+                <details className="chaos-panel">
+                  <summary>
+                    混沌卡（{game.chaosPool!.length} 张剩余
+                    {game.chaosPlayed?.length ? `，已打出 ${game.chaosPlayed.length}` : ''}）
+                  </summary>
+                  <div className="option-list">
+                    {game.chaosPool!.map((c) => (
+                      <button
+                        key={c.id}
+                        className={c.playable ? 'option-btn' : ''}
+                        disabled={!c.playable}
+                        title={c.description || `${c.cost} → ${c.gain}`}
+                        onClick={() => {
+                          // c001 需要选一张永久卡丢弃
+                          const needPerm = /SacrificePermanent/.test(
+                            JSON.stringify(CHAOS_CARDS.find((x) => x.id === c.id)?.actions ?? []),
+                          );
+                          if (needPerm) {
+                            const perm = myPlayer?.permanents?.[0];
+                            if (!perm) return;
+                            if (!window.confirm(
+                              `「${c.name}」需要丢弃一张激活的永久卡，确认丢弃第一张并打出？`,
+                            )) return;
+                            playChaosCard(c.id, perm);
+                          } else {
+                            playChaosCard(c.id);
+                          }
+                        }}
+                      >
+                        {c.name}
+                        <span className="chaos-cost">
+                          （{c.cost} → {c.gain}）
+                        </span>
+                        {!c.playable && c.reason && (
+                          <span className="option-reason">（{c.reason}）</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </details>
+              )}
+
               {/* 轮到我：可结束回合；狱中则服刑 */}
               {prompt.type === 'select_move_card' && (
                 <>
@@ -251,7 +301,7 @@ export function GamePage() {
   );
 }
 
-import { CARD_BY_ID, MISFORTUNE_CARDS } from '@gremlins/shared';
+import { CARD_BY_ID, CHAOS_CARDS, MISFORTUNE_CARDS } from '@gremlins/shared';
 import type { ActionCard, MisfortuneCard } from '@gremlins/shared';
 
 /**

@@ -271,7 +271,66 @@ try {
     }
   }
 
-  console.log('\n=== 5. 无错误 ===');
+  console.log('\n=== 5. 混沌卡（暴乱卡）协议 ===');
+  const lastState = got.gameState;
+  check('状态里带 chaosPool（共享池）与 riotCardsEnabled', () => {
+    if (!Array.isArray(lastState.chaosPool)) throw new Error('缺 chaosPool');
+    if (typeof lastState.riotCardsEnabled !== 'boolean') throw new Error('缺 riotCardsEnabled');
+    console.log(`      riotCardsEnabled=${lastState.riotCardsEnabled}，`
+      + `池内 ${lastState.chaosPool.length} 张，已打出 ${lastState.chaosPlayed?.length ?? 0} 张`);
+  });
+
+  const playableChaos = (lastState.chaosPool ?? []).find((c) => c.playable);
+  if (playableChaos) {
+    // 先把请求发出去，再用同步 check 断言（check 是同步的）
+    const beforePool = lastState.chaosPool.length;
+    const meBefore = lastState.players.find((p) => p.id === socket.id);
+    const beforeCogs = meBefore.resources.cogs;
+    got.errors.length = 0;
+    socket.emit('game:play_chaos', { cardId: playableChaos.id });
+    const after = (await waitFor(
+      '混沌卡打出后池减少',
+      () => got.gameState?.chaosPool?.length === beforePool - 1,
+      8000,
+    )) ? got.gameState : undefined;
+
+    check(`打出混沌卡「${playableChaos.name}」生效`, () => {
+      if (got.errors.length) throw new Error(JSON.stringify(got.errors));
+      if (!after) throw new Error(`池内张数未从 ${beforePool} 减少`);
+      const me2 = after.players.find((p) => p.id === socket.id);
+      console.log(`      池 ${beforePool} → ${after.chaosPool.length} 张，`
+        + `齿轮 ${beforeCogs} → ${me2.resources.cogs}`);
+      if (me2.resources.cogs <= beforeCogs) {
+        throw new Error(`打出应加齿轮：${beforeCogs} → ${me2.resources.cogs}`);
+      }
+    });
+  } else {
+    check('本局没有可打出的混沌卡（地点/代价限制，跳过）', () => {
+      const reasons = (lastState.chaosPool ?? [])
+        .map((c) => `${c.name}:${c.reason ?? '?'}`).slice(0, 3).join(' | ');
+      console.log(`      ${reasons}`);
+    });
+  }
+
+  // 无论如何都要验证 `game:play_chaos` 已接通：
+  // 用一张不可打的卡，服务端应拒绝并给出原因（而不是静默无响应）。
+  const blocked = (lastState.chaosPool ?? []).find((c) => !c.playable);
+  if (blocked) {
+    got.errors.length = 0;
+    socket.emit('game:play_chaos', { cardId: blocked.id });
+    const rejected = await waitFor('混沌卡被拒绝', () => got.errors.length > 0, 8000);
+    check('不可打的混沌卡被服务端拒绝（事件已接通）', () => {
+      if (!rejected) throw new Error('服务端没有回应拒绝原因');
+      const last = got.errors[got.errors.length - 1];
+      if (last.code !== 'INVALID_ACTION') {
+        throw new Error('应回 INVALID_ACTION，实际 ' + JSON.stringify(last));
+      }
+      console.log(`      [${last.code}] ${String(last.message).slice(0, 80)}`);
+      got.errors.length = 0; // 这是预期内的拒绝，不算后续的"无错误"失败
+    });
+  }
+
+  console.log('\n=== 6. 无错误 ===');
   check('过程中没有 error 事件', () => {
     if (got.errors.length) throw new Error(JSON.stringify(got.errors));
   });

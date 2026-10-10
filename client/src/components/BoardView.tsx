@@ -1,7 +1,7 @@
-import { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import type { SerializedPlayer } from '@gremlins/shared';
 import {
-  BOARD_VIEW, getBoardView, edgeBend, isBidirectional,
+  BOARD_VIEW, getBoardView, isBidirectional,
   type BoardViewData, type BoardTile, type CellTypeName,
 } from '@gremlins/shared';
 import { createLogger } from '../utils/logger.js';
@@ -83,6 +83,7 @@ export function BoardView({
         viewBox="-10 -7 120 117"
         preserveAspectRatio="xMidYMid meet"
       >
+        {/* 围棋盘背景 */}
         <defs>
           <marker id="arrow" markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto" markerUnits="strokeWidth">
             <path d="M0,0 L4,2 L0,4 Z" fill="#5a7ab0" />
@@ -97,6 +98,23 @@ export function BoardView({
             <path d="M4,0 L0,2 L4,4 Z" fill="#f5b800" />
           </marker>
         </defs>
+
+        {/* 木色底 */}
+        <rect x="-10" y="-7" width="120" height="117" fill="#deb887" rx="2" />
+
+        {/* 网格线（围棋盘式） */}
+        {board.gridSize > 0 && (() => {
+          const lines: React.ReactElement[] = [];
+          const m = 6; // BOARD_MARGIN
+          const range = 100 - m * 2;
+          const step = range / (board.gridSize - 1);
+          for (let i = 0; i < board.gridSize; i++) {
+            const v = m + i * step;
+            lines.push(<line key={`h${i}`} x1={m} y1={v} x2={100 - m} y2={v} stroke="#8B6914" strokeWidth="0.25" opacity="0.4" />);
+            lines.push(<line key={`v${i}`} x1={v} y1={m} x2={v} y2={100 - m} stroke="#8B6914" strokeWidth="0.25" opacity="0.4" />);
+          }
+          return lines;
+        })()}
 
         {/* 所有边（双向边合并为一根双头箭头） */}
         {board.edges.map((e, i) => {
@@ -118,13 +136,10 @@ export function BoardView({
           const y1 = from.y + uy * r;
           const x2 = to.x - ux * r;
           const y2 = to.y - uy * r;
-          const bend = bi ? undefined : edgeBend(board, e.from, e.to);
-          const cx = (x1 + x2) / 2 + (bend?.dx ?? 0);
-          const cy = (y1 + y2) / 2 + (bend?.dy ?? 0);
           return (
             <path
               key={`edge-${i}`}
-              d={`M ${x1.toFixed(2)} ${y1.toFixed(2)} Q ${cx.toFixed(2)} ${cy.toFixed(2)} ${x2.toFixed(2)} ${y2.toFixed(2)}`}
+              d={`M ${x1.toFixed(2)} ${y1.toFixed(2)} L ${x2.toFixed(2)} ${y2.toFixed(2)}`}
               fill="none"
               stroke={isHighlighted ? '#f5b800' : '#5a7ab0'}
               strokeWidth={isHighlighted ? '0.55' : '0.32'}

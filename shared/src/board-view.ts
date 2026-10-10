@@ -68,6 +68,8 @@ export interface BoardViewData {
   byId: Map<string, BoardTile>;
   /** 预计算的边弯曲偏移（避免交叉/压住节点） */
   bends: Map<string, { dx: number; dy: number }>;
+  /** 网格大小（围棋盘式：GRID_SIZE × GRID_SIZE 条线） */
+  gridSize: number;
 }
 
 const JAIL_TILE_KIND: TileKind = 'jail';
@@ -117,6 +119,7 @@ export function buildBoardView(map: BoardMap, layout: BoardLayout): BoardViewDat
     jailTileId: jail?.id ?? tiles[0]?.id ?? '',
     byId: new Map(tiles.map((t) => [t.id, t])),
     bends: new Map(),
+    gridSize: GRID_SIZE,
   };
 
   computeEdgeBends(view);
@@ -124,75 +127,109 @@ export function buildBoardView(map: BoardMap, layout: BoardLayout): BoardViewDat
 }
 
 /**
- * 调整格子坐标：在原始环状布局基础上做轻量调整。
+ * 围棋盘式网格布局：所有格子放在 GRID_SIZE×GRID_SIZE 网格的交叉点上。
  *
- * 原始布局（board-layout.ts）把主干道铺成圆环；这里在此基础上：
- *  1. 建筑向外推（外圈）
- *  2. 枢纽（出度≥3）向内拉（内圈）
- *  3. 轻量排斥（避免重叠）
- *  4. 裁剪到画布范围
+ * 算法：
+ *  1. 主干道沿外圈铺一圈（圆角矩形路径）
+ *  2. 非主干格按其到主干邻居的相对位置放在内部
+ *  3. 碰撞检测：同一格点最多一个格子，冲突时螺旋搜索空位
+ *  4. 缩放到 0..100 坐标空间
  */
+const GRID_SIZE = 18;
+const BOARD_MARGIN = 6;
+const BOARD_RANGE = 100 - BOARD_MARGIN * 2;
+const CELL_SPACING = BOARD_RANGE / (GRID_SIZE - 1);
+
+function gridToSvg(gx: number, gy: number): { x: number; y: number } {
+  return {
+    x: BOARD_MARGIN + gx * CELL_SPACING,
+    y: BOARD_MARGIN + gy * CELL_SPACING,
+  };
+}
+
 function adjustPositions(tiles: BoardTile[], spine: string[]): void {
-  const CX = 50, CY = 50;
-
-  // 第一轮：按类型分层
-  for (const t of tiles) {
-    const dx = t.x - CX;
-    const dy = t.y - CY;
-    const r = Math.hypot(dx, dy) || 1;
-    const ang = Math.atan2(dy, dx);
-
-    if (t.isBuilding) {
-      // 建筑：外推到 r≈54
-      const target = 54;
-      t.x = CX + Math.cos(ang) * target;
-      t.y = CY + Math.sin(ang) * target;
-    } else if (t.out.length >= 3 || t.in.length >= 3) {
-      // 枢纽：内拉到 r≈15
-      const target = 15;
-      t.x = CX + Math.cos(ang) * target;
-      t.y = CY + Math.sin(ang) * target;
-    } else {
-      // 站点：保持原始位置，轻微外推到 r≈40-46
-      const target = Math.max(40, Math.min(46, r));
-      t.x = CX + Math.cos(ang) * target;
-      t.y = CY + Math.sin(ang) * target;
-    }
-  }
-
-  // 第二轮：轻量排斥（仅推开太近的非建筑节点）
-  const MIN_DIST = 4.0;
-  for (let iter = 0; iter < 15; iter++) {
-    let moved = false;
-    for (let i = 0; i < tiles.length; i++) {
-      for (let j = i + 1; j < tiles.length; j++) {
-        const a = tiles[i], b = tiles[j];
-        let dx = b.x - a.x;
-        let dy = b.y - a.y;
-        let d = Math.hypot(dx, dy);
-        if (d >= MIN_DIST) continue;
-        if (d < 0.01) { dx = 1; dy = 0; d = 1; }
-        const push = (MIN_DIST - d) * 0.4;
-        const ux = dx / d, uy = dy / d;
-        // 建筑不动，只推站点
-        const wA = a.isBuilding ? 0 : 1;
-        const wB = b.isBuilding ? 0 : 1;
-        if (wA === 0 && wB === 0) continue;
-        const wSum = wA + wB;
-        a.x -= ux * push * (wB / wSum);
-        a.y -= uy * push * (wB / wSum);
-        b.x += ux * push * (wA / wSum);
-        b.y += uy * push * (wA / wSum);
-        moved = true;
+  const spineSet = new Set(spine);
+  const occupied = new Set<string>();
+  const place = (t: BoardTile, gx: number, gy: number) => {
+    gx = Math.max(0, Math.min(GRID_SIZE - 1, gx));
+    gy = Math.max(0, Math.min(GRID_SIZE - 1, gy));
+    // 螺旋搜索空位
+    if (occupied.has(`${gx},${gy}`)) {
+      let found = false;
+      for (let r = 1; r < GRID_SIZE && !found; r++) {
+        for (let dx = -r; dx <= r && !found; dx++) {
+          for (let dy = -r; dy <= r && !found; dy++) {
+            if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+            const nx = Math.max(0, Math.min(GRID_SIZE - 1, gx + dx));
+            const ny = Math.max(0, Math.min(GRID_SIZE - 1, gy + dy));
+            if (!occupied.has(`${nx},${ny}`)) {
+              gx = nx; gy = ny;
+              found = true;
+            }
+          }
+        }
       }
     }
-    if (!moved) break;
+    occupied.add(`${gx},${gy}`);
+    const p = gridToSvg(gx, gy);
+    t.x = p.x; t.y = p.y;
+  };
+
+  // ── 主干道：沿外圈铺 ──
+  // 外圈路径：上边左→右，右边上→下，下边右→左，左边下→上
+  const perimeter: Array<[number, number]> = [];
+  const maxG = GRID_SIZE - 1;
+  // 上边
+  for (let i = 0; i <= maxG; i++) perimeter.push([i, 0]);
+  // 右边
+  for (let i = 1; i <= maxG; i++) perimeter.push([maxG, i]);
+  // 下边
+  for (let i = maxG - 1; i >= 0; i--) perimeter.push([i, maxG]);
+  // 左边
+  for (let i = maxG - 1; i >= 1; i--) perimeter.push([0, i]);
+
+  const spineList = spine.filter((id) => tiles.find((t) => t.id === id));
+  const tileById = new Map(tiles.map((t) => [t.id, t]));
+  const spineIdx = new Map<string, number>();
+  spineList.forEach((id, i) => spineIdx.set(id, i));
+
+  // 放主干道
+  for (let i = 0; i < spineList.length; i++) {
+    const t = tileById.get(spineList[i]);
+    if (!t) continue;
+    const [gx, gy] = perimeter[i % perimeter.length];
+    place(t, gx, gy);
   }
 
-  // 裁剪到画布范围
-  for (const t of tiles) {
-    t.x = Math.max(3, Math.min(97, t.x));
-    t.y = Math.max(3, Math.min(97, t.y));
+  // ── 非主干格：放在邻居旁边 ──
+  const remaining = tiles.filter((t) => !spineSet.has(t.id));
+  for (const t of remaining) {
+    // 找已放置的邻居，取平均位置
+    const neighbors = [...t.out, ...t.in]
+      .map((id) => tileById.get(id))
+      .filter((n): n is BoardTile => !!n && n.x !== t.x);
+    if (neighbors.length === 0) {
+      // 没有已放置的邻居，放中心
+      place(t, Math.floor(GRID_SIZE / 2), Math.floor(GRID_SIZE / 2));
+      continue;
+    }
+    let avgX = 0, avgY = 0;
+    for (const n of neighbors) {
+      const nx = Math.round((n.x - BOARD_MARGIN) / CELL_SPACING);
+      const ny = Math.round((n.y - BOARD_MARGIN) / CELL_SPACING);
+      avgX += nx; avgY += ny;
+    }
+    avgX = Math.round(avgX / neighbors.length);
+    avgY = Math.round(avgY / neighbors.length);
+    // 往内圈偏移（远离边缘）
+    const cx = GRID_SIZE / 2, cy = GRID_SIZE / 2;
+    const dx = cx - avgX, dy = cy - avgY;
+    const dlen = Math.hypot(dx, dy) || 1;
+    avgX = Math.round(avgX + (dx / dlen) * 2);
+    avgY = Math.round(avgY + (dy / dlen) * 2);
+    avgX = Math.max(1, Math.min(GRID_SIZE - 2, avgX));
+    avgY = Math.max(1, Math.min(GRID_SIZE - 2, avgY));
+    place(t, avgX, avgY);
   }
 }
 

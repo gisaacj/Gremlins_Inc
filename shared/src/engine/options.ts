@@ -202,6 +202,21 @@ function cellOptions(state: EngineState, p: EnginePlayer): OptionSpec[] {
   const pr = def?.params ?? [];
   const out: OptionSpec[] = [];
 
+  // ── 「无视本站」：本站规则对这名玩家**不生效** ──
+  //
+  // 由 `IgnoreCell` 动作置位（`p.flags.ignoreCell`），共 11 张卡用到，例如：
+  //  - a023「恶作剧」：与对手交换位置，**交换后所在位置的规则不会触发**
+  //  - a160「好运」：厄运站点的规则**不会影响你**
+  //
+  // ⚠️ 这里原先只挡住了"自动落点结算"（`resolveCellEffect`），
+  // 却没挡住**可选动作**，于是打完「恶作剧」换到办公楼后，
+  // 界面仍然给出「卖选票」——正是用户报的 bug #2。
+  // 既然卡面说"站点规则不会生效"，本站的可选动作同样不该提供。
+  //
+  // 注意：只屏蔽**本站**动作。角色能力带来的动作（如政治家从银行直达天界）
+  // 与"再打一张牌"之类的通用动作不受影响 —— 它们不属于"本站规则"。
+  if (p.flags['ignoreCell'] === 1) return out;
+
   if (def?.optional) {
     out.push(...stationOptions(state, p, cell.cellType, pr, def.text.description));
   } else if (cell.cellType === 'Danger' || cell.cellType === 'Treasure') {

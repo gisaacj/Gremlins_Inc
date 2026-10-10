@@ -380,6 +380,16 @@ export function chaosOptions(state: EngineState, playerId: string): ChaosOption[
     if (!canAffordChaos(p, card)) {
       return { cardId: id, name: card.text.name, cost, gain, playable: false, reason: `付不起（需 ${cost}）` };
     }
+    // c001「供奉」需要**先丢弃一张激活的永久卡**才算可打。
+    //
+    // 这里曾有 (一个) 不一致：`playChaosCard` 会检查永久卡并要求 `permanentId`，
+    // 而 `chaosOptions` 只查了地点与费用，于是**报告"可打出"但实际必然失败**。
+    // 实测：一局里 5 次"可打出"全部以「没有可丢弃的永久卡」告终，
+    // 而且这是混沌子系统唯一的失败来源。
+    const needsSacrifice = card.actions.some((a) => String(a.type) === 'SacrificePermanent');
+    if (needsSacrifice && !p.permanents.length) {
+      return { cardId: id, name: card.text.name, cost, gain, playable: false, reason: '需先拥有一张激活的永久卡' };
+    }
     return { cardId: id, name: card.text.name, cost, gain, playable: true };
   });
 }

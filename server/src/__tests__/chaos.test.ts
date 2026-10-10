@@ -108,11 +108,30 @@ check('在地狱时 c001/c002/c003 变为可打出', () => {
   const p = putAtCellType(st, c.cellTypeId);
   p.res.money = 5000;
   p.res.vote = 50;
+  // ⚠️ c001「供奉」需要**先丢弃一张激活的永久卡**（`SacrificePermanent`）。
+  // `playChaosCard` 一直有这条检查，但 `chaosOptions` 早期漏了，
+  // 于是会在没有永久卡时误报"可打出"。本用例原先没给永久卡却断言可打出，
+  // 实际是在**固化那个 bug**——现在给一张，让断言反映真实规则。
+  p.permanents = ['perm-test'];
   const opts = chaosOptions(st, 'p0');
   for (const n of ['c001', 'c002', 'c003']) {
     const o = opts.find((x) => x.cardId === card(n).id)!;
     assert.equal(o.playable, true, `${n} 在地狱应可打出（${o.reason ?? ''}）`);
   }
+});
+
+check('没有永久卡时 c001 在地狱也**不可**打出（供奉的前置）', () => {
+  const st = game();
+  const c = card('c001');
+  const p = putAtCellType(st, c.cellTypeId);
+  p.res.money = 5000;
+  p.res.vote = 50;
+  p.permanents = [];                       // 明确没有永久卡
+  const o = chaosOptions(st, 'p0').find((x) => x.cardId === c.id)!;
+  assert.equal(o.playable, false, '没有可献祭的永久卡时不该报可打出');
+  assert.match(o.reason ?? '', /永久卡/, `理由应提到永久卡：${o.reason}`);
+  // 且真正打出时也会被拒
+  assert.equal(playChaosCard(st, 'p0', c.id).ok, false);
 });
 
 console.log('\n=== 3. 打出与结算 ===');

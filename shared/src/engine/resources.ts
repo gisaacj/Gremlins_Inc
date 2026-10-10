@@ -159,13 +159,28 @@ export function payAmount(
   payer: EnginePlayer,
   payee: EnginePlayer | undefined,
   slots: ParamSlot[],
-  opts: { defaultKey?: ResourceKey } = {},
+  opts: {
+    defaultKey?: ResourceKey;
+    /**
+     * 付款方是否满足 `Poorest` tag（"最穷"）。为真时金额**翻倍**。
+     *
+     * 对应卡牌 a011 的 `OpponentPayMoney(Poorest|50)`：
+     * 英文原文 "Every other player: … gives you {1}$.
+     * If you have the least $, they give you twice as much."
+     *
+     * 注意 `Poorest` 被 `parseParam` 当成普通 tag，`firstNumber` 仍取到 50，
+     * 所以**翻倍必须由调用方通过这个开关告知**——`resources.ts` 拿不到全局
+     * 玩家列表，无法自行判断谁最穷。
+     */
+    poorestDouble?: boolean;
+  } = {},
 ): { paid: number; full: boolean; key: ResourceKey; reason?: 'no-amount' } {
   const payKey: ResourceKey = opts.defaultKey ?? 'money';
   const basis = firstResource(slots);
   const factor = firstNumber(slots, 0);
 
-  const amount = basis ? Math.floor(payer.res[basis] * factor) : factor;
+  let amount = basis ? Math.floor(payer.res[basis] * factor) : factor;
+  if (opts.poorestDouble) amount *= 2;
 
   const r = transferRes(payer, payee, payKey, amount);
   return { paid: r.moved, full: r.full, key: payKey };

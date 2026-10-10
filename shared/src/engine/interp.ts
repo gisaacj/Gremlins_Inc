@@ -1300,6 +1300,17 @@ function handleResourceLoss(
 ): RunResult | undefined {
   const o = owner(state, ctx);
 
+  // ── 门控 tag：不满足就**整段跳过**（不是改成别的数值）──
+  //
+  // `Governor`：只有当前总督才能享受/承担这条效果。
+  //   a090「…」：`OpponentLoseMoney(-300|Governor)` — "**If you're the Governor**: +{1}$, +{2}^."
+  //   旧实现忽略该 tag，导致**非总督打出也能白拿 +300$ 和 +3^**（实测确认）。
+  //   这类"整段跳过"的语义与 `OpponentArrest(Evil)` 一致（不满足恶意条件就不逮捕）。
+  if (hasTag(slots, 'Governor') && state.mayorId !== o.id) {
+    log(state, o.id, `${ctx.source}：需为总督才生效，跳过`);
+    return undefined;
+  }
+
   for (const tgt of targetPlayers(state, ctx)) {
     switch (kind) {
       case 'OpponentLoseVotes':
@@ -1331,8 +1342,18 @@ function handleResourceLoss(
       case 'OpponentPayMoney':
       case 'OpponentPayScore': {
         const key: ResourceKey = kind === 'OpponentPayMoney' ? 'money' : 'score';
-        const r = payAmount(tgt, o, slots, { defaultKey: key });
-        log(state, tgt.id, `${nameOf(tgt)} 支付 ${r.paid} ${RES_LABEL[r.key]} 给 ${nameOf(o)}`);
+        // `Poorest` tag：出牌者是全场最穷时金额**翻倍**（a011）。
+        // 判定用**出牌者** `o`，不是付款方——牌面写的是
+        // "If **you** have the least $, they give you twice as much."
+        //
+        // 这里不 import `abilities.isPoorest`：`abilities.ts` 已经 import 本文件，
+        // 再反向依赖会形成环。判定只有一行，就地写更安全。
+        const poorestDouble = hasTag(slots, 'Poorest')
+          && o.res.money === Math.min(...state.players.map((x) => x.res.money));
+        const r = payAmount(tgt, o, slots, { defaultKey: key, poorestDouble });
+        log(state, tgt.id,
+          `${nameOf(tgt)} 支付 ${r.paid} ${RES_LABEL[r.key]} 给 ${nameOf(o)}`
+          + (poorestDouble ? '（出牌者最穷，金额翻倍）' : ''));
         if (hasTag(slots, 'GetHalf') && r.paid > 0) {
           const half = Math.floor(r.paid / 2);
           transferRes(o, tgt, r.key, half);
@@ -1350,6 +1371,18 @@ function handleResourceLoss(
         // ⚠️ 负参数 = **获得**（`OpponentLoseMoney(-20)` 即目标 +20$）。
         // `transferRes` 会把负数夹成 0，所以负值必须走 `addRes` 而不是 `payAmount`，
         // 否则 a074/a150 这类"移动时 +N$"的卡会被静默丢弃。
+        //
+        // `Percent` tag = 按目标当前持有量的百分比扣（a139：`Percent|50`
+        // = "they -{2}% of their $"，即扣掉 50% 的金钱，不是扣 50）
+        if (hasTag(slots, 'Percent')) {
+          const pct = firstNumber(slots, 0) || 0;
+          const lost = Math.floor((tgt.res.money * pct) / 100);
+          if (lost > 0) {
+            addRes(tgt, 'money', -lost);
+            log(state, tgt.id, `${nameOf(tgt)} 失去 ${lost} 金钱（${pct}%）`);
+          }
+          break;
+        }
         const negAmount = firstNumber(slots, 0);
         if (negAmount < 0) {
           const got = addRes(tgt, 'money', -negAmount);

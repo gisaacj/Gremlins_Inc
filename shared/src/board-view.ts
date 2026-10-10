@@ -137,6 +137,7 @@ export function computeReachableTiles(
   view: BoardViewData,
   startId: string,
   steps: number,
+  _reverse?: boolean,
 ): Map<string, string[]> {
   const result = new Map<string, string[]>();
   if (steps <= 0) return result;

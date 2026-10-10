@@ -116,23 +116,6 @@ export function BoardView({
           </marker>
         </defs>
 
-        {/* 木色底 */}
-        <rect x="-10" y="-7" width="120" height="117" fill="#deb887" rx="2" />
-
-        {/* 网格线（围棋盘式） */}
-        {board.gridSize > 0 && (() => {
-          const lines: React.ReactElement[] = [];
-          const m = 6; // BOARD_MARGIN
-          const range = 100 - m * 2;
-          const step = range / (board.gridSize - 1);
-          for (let i = 0; i < board.gridSize; i++) {
-            const v = m + i * step;
-            lines.push(<line key={`h${i}`} x1={m} y1={v} x2={100 - m} y2={v} stroke="#8B6914" strokeWidth="0.25" opacity="0.4" />);
-            lines.push(<line key={`v${i}`} x1={v} y1={m} x2={v} y2={100 - m} stroke="#8B6914" strokeWidth="0.25" opacity="0.4" />);
-          }
-          return lines;
-        })()}
-
         {/* 所有边（双向边合并为一根双头箭头） */}
         {board.edges.map((e, i) => {
           const bi = isBidirectional(board, e.from, e.to);

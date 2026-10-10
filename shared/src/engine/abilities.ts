@@ -78,6 +78,7 @@ export interface AbilitySpec {
     | 'thiefCrimePays'         // 用罪恶卡 +N 齿轮
     | 'judgeGuardian'          // 法院/警察站打牌 +N 选票
     | 'politicianCharisma'     // 讲话/给选票的卡 +N 选票
+    | 'politicianBreathingTax' // 政治家当镇长时，全场贿赂 +N
     | 'politicianPopulist'     // 每 N 选票 +N 收入
     | 'bankerCashback'         // 付钱打牌返现 N%
     | 'bankerDividends'        // 银行投资立刻返还
@@ -139,6 +140,15 @@ export const CHARACTER_ABILITIES: Record<string, AbilitySpec[]> = {
       action: 'Politician_Astral_Club_2', event: 'turnStart', label: '天界俱乐部',
       rule: '持有 7 选票以上时：可从银行直达天界',
       nums: [7], flag: 'astralClub',
+    },
+    {
+      // ⚠️ 这条能力**不在 `DM.Characters` 的 ActionList 里**（原版按角色名直接调用），
+      // 所以必须在这里手工登记，否则 `abilitiesOf` 找不到它。
+      // 它**不挂在政治家自己身上生效**，而是"政治家当镇长时，全场贿赂 +N"
+      // —— 由 `breathingTaxFrom(state)` 在算贿赂时统一处理，故这里没有 event 触发点。
+      action: 'Politician_Breathing_Tax', event: 'gameStart', label: '呼吸税',
+      rule: '你当镇长时：全场所有玩家的贿赂 +5',
+      nums: [5], flag: 'politicianBreathingTax',
     },
   ],
   Enterpreneur: [
@@ -713,6 +723,45 @@ export function rollDiceWithAbilities(
   const dice = rollDice(state);
   fireAbility(state, p.id, 'afterRoll', { ...ctx, dice });
   return dice;
+}
+
+/**
+ * 政治家「呼吸税」给**所有人**的贿赂加成。
+ *
+ * 原版 `GPlayer.GetBribe()`：
+ * ```csharp
+ * foreach (GPlayer gp in this.Game.Players.Values) {
+ *     if (gp.Governor) {
+ *         if (DM.Characters[gp.CharacterID].Name == "Politician"
+ *             && gp.GetCharacterAbility(EAction.Politician_Breathing_Tax) != null) {
+ *             num += gp.GetCharacterAbilityParam(EAction.Politician_Breathing_Tax, 5, 2);
+ *             break;
+ *         }
+ *         break;
+ *     }
+ * }
+ * ```
+ *
+ * 注意三点：
+ *  - 判定的是**镇长那个人**是不是政治家、有没有这个能力 —— **与算谁的贿赂无关**；
+ *    即只要政治家当镇长，**全场每个人的贿赂都 +N**。
+ *  - 默认值 **5**（第二个参数），`ActionParams[2]` = `nums[0]`。
+ *  - 只对**当任镇长**生效；遍历到镇长就 `break`，所以最多加一次。
+ *
+ * ⚠️ `Politician_Breathing_Tax` **不在导出的角色数据里**
+ * （角色 ActionList 只有 Charisma / Populist / Astral_Club_2），
+ * 所以目前恒走默认值 5。若日后找到该能力的参数，改这里即可。
+ */
+export function breathingTaxFrom(state: EngineState): number {
+  const governor = state.players.find((p) => p.id === state.mayorId);
+  if (!governor) return 0;
+  const char = governor.characterId ? CHARACTER_BY_ID[governor.characterId] : undefined;
+  if (!char || char.name !== 'Politician') return 0;
+  const ability = abilitiesOf(governor).find((s) => s.action === 'Politician_Breathing_Tax');
+  // 没有该能力条目时**不加**；有则取其参数（缺省 5）
+  if (!ability) return 0;
+  const n = ability.nums?.[0];
+  return typeof n === 'number' && n > 0 ? n : 5;
 }
 
 /** 给 bribeAmount 用的角色贿赂修正 */

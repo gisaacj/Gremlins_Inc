@@ -64,11 +64,29 @@ check('注册表覆盖数据里出现的全部角色能力原语', () => {
   assert.equal(missing.length, 0, `未登记: ${missing.join(', ')}`);
   console.log(`      ${used.length} 个原语全部有登记`);
 });
-check('每个角色的能力条数与数据一致', () => {
+check('每个角色的能力条数与数据一致（含"仅引擎调用"的补充条目）', () => {
+  // ⚠️ 有极少数能力**不在** `DM.Characters` 的 ActionList 里 —— 原版按角色名
+  // 直接调用（`GetCharacterAbility`），导出数据里看不到，必须手工登记进
+  // `CHARACTER_ABILITIES`。这些是"数据之外"的合法条目，比较时要排除。
+  //
+  // 实测（第 16 轮核对）：目前**只有这一条**属于这种情况。
+  // 早先笔记里提过的 `Politician_Loyal_Electorate` / `Politician_Connections`
+  // / `Banker_*` 等，在当前数据里**本来就有**，不需要豁免。
+  const CALL_ONLY: Record<string, string[]> = {
+    Politician: ['Politician_Breathing_Tax'],
+  };
+
   for (const char of Object.values(CHARACTER_BY_ID)) {
     const fromData = char.actions.filter((a) => String(a.type).includes('_')).length;
-    const fromReg = (CHARACTER_ABILITIES[char.name] ?? []).length;
-    assert.equal(fromReg, fromData, `${char.name}: 数据 ${fromData} 条，注册表 ${fromReg} 条`);
+    const reg = CHARACTER_ABILITIES[char.name] ?? [];
+    const exempt = new Set(CALL_ONLY[char.name] ?? []);
+    const regFromData = reg.filter((s) => !exempt.has(s.action)).length;
+    assert.equal(regFromData, fromData,
+      `${char.name}: 数据 ${fromData} 条，注册表(扣除仅调用条目) ${regFromData} 条`);
+    // 同时确认豁免清单里的条目**确实**已登记，否则清单会悄悄失效
+    for (const a of exempt) {
+      assert.ok(reg.some((s) => s.action === a), `${char.name}: 豁免条目 ${a} 未登记`);
+    }
   }
 });
 check('每条能力都有 event / label / rule / action', () => {

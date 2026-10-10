@@ -23,7 +23,7 @@ import { displayCardDescription, displayCardName } from '../display-text.js';
 import {
   applyImmediatePermanents, discardPermanent, extraBribeFrom, fireTrigger,
 } from './permanents.js';
-import { bribeModifier, fireAbility } from './abilities.js';
+import { bribeModifier, breathingTaxFrom, fireAbility } from './abilities.js';
 import { availableOptions, diceTableOf } from './options.js';
 import { centralMisfortuneId } from '../board-view.js';
 
@@ -1618,6 +1618,8 @@ export function bribeAmount(state: EngineState, p: EnginePlayer): number {
   let amount = base + Math.floor(p.res.malice * mod.perMalice);
   // 「自动官僚」等永久卡：其他玩家的贿赂 +N
   amount += extraBribeFrom(state, p.id);
+  // 政治家「呼吸税」：**政治家当镇长时，全场贿赂 +5**（与算谁的贿赂无关）
+  amount += breathingTaxFrom(state);
   return Math.max(0, amount);
 }
 

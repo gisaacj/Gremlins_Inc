@@ -7,6 +7,49 @@
 
 ## 〇、⚠️ 先读：本次审计的时效性更正
 
+**第三节的"更正清单"是历史快照，不是长期缺陷表** —— 已按第 15/16 轮实测复核逐条标注。
+
+### 第 16 轮（续）：补完最后一条规则缺口 —— 政治家「呼吸税」
+
+第 15 轮复核后规则清单只剩两条：`SpecialFlag`（显示层）与呼吸税。
+这轮把呼吸税做掉，**规则清单上已无未实现条目**。
+
+源码依据（`GPlayer.GetBribe()`，GPlayer.cs:1136-1169）：
+
+```csharp
+foreach (GPlayer gp in this.Game.Players.Values) {
+    if (gp.Governor) {
+        if (DM.Characters[gp.CharacterID].Name == "Politician"
+            && gp.GetCharacterAbility(EAction.Politician_Breathing_Tax) != null) {
+            num += gp.GetCharacterAbilityParam(EAction.Politician_Breathing_Tax, 5, 2);
+            break;
+        }
+        break;
+    }
+}
+```
+
+三个容易搞错的点：
+
+1. **判定的是"镇长那个人"是不是政治家** —— 与"在算谁的贿赂"**无关**。
+   所以只要政治家当镇长，**全场每个人的贿赂都 +5**，不是只给镇长自己加。
+2. 默认值 **5**（`GetCharacterAbilityParam` 的第二个参数是默认值）。
+3. 遍历到镇长就 `break`，**最多加一次**，不会因场上有多个政治家而叠加。
+
+实现：`breathingTaxFrom(state)`（`abilities.ts`）+ `bribeAmount()` 里累加。
+⚠️ 该能力**不在导出的角色数据里**，必须**手工登记**进 `CHARACTER_ABILITIES`，
+否则 `abilitiesOf` 找不到它 → 恒为 0，测试里专门钉了一条防这个坑。
+
+**顺带纠正我自己的过期笔记**：我曾记过"6 条能力不在数据里"
+（`Politician_Loyal_Electorate` / `Politician_Connections` / `Banker_*` 等），
+实测核对后**当前只有 `Politician_Breathing_Tax` 这一条**属于此情况。
+`abilities.test.ts` 的条数比对已改为"扣除豁免条目后相等"，
+并**顺带断言豁免清单里的条目确实已登记**，避免清单悄悄失效。
+
+新增测试 `bribe.test.ts`（15 项）。
+
+---
+
 **第三节的"更正清单"曾经严重过时。**
 
 整理文档时我读的是**较早的分支**，而仓库当前实现（GitHub `master`）
@@ -35,12 +78,14 @@
 > 监狱 `Rank`/`Karma`）曾长期停留在"未实现"，直到**第 15 轮**做了一次
 > 全表逐条实测复核才纠正。**务必以第 3 节各表的"复核状态"列为准。**
 
-### 仍未实现（截至第 15 轮复核，仅这 2 条）
+### 仍未实现（截至第 16 轮复核）
 
 | # | 项目 | 说明 |
 |---|---|---|
-| 14 | 政治家「呼吸税」`Politician_Breathing_Tax` | 镇长是政治家时全员贿赂 +5。引擎内无任何命中 |
 | 28 | `SpecialFlag` 语义 | 混沌卡 c001 的卡面"特殊规则"角标；**属显示层信息，不影响逻辑** |
+
+> ✅ 第 16 轮把 **#14 政治家「呼吸税」** 补完了（见下），
+> 规则清单上已**没有未实现的条目**。
 
 **教训**：文档里的"更正清单"是**某时间点的快照**，不是长期缺陷表。
 落地前必须**实测审计**，不要直接照改。
@@ -509,7 +554,7 @@ Capacitor 的 WebView 把页面放在**自己的本地 scheme** 上
 
 | # | 项目 | 说明 |
 |---|---|---|
-| 14 | 政治家「呼吸税」`Politician_Breathing_Tax` | 镇长是政治家时全员贿赂 +5；引擎内无任何命中 |
+| 14 | 政治家「呼吸税」`Politician_Breathing_Tax` | 镇长是政治家时全员贿赂 +5；引擎内无任何命中 | ✅ **已修**（`breathingTaxFrom`）。本条原标"未实现"**已过时** |
 | 28 | `SpecialFlag` 语义 | 混沌卡 c001 的卡面"特殊规则"角标；**属显示层，不影响逻辑** |
 
 ### 顺手澄清一处曾经的过度声明
@@ -723,7 +768,7 @@ public interface ISGame
 | 11 | 建筑每回合一次 | 只有站点动作限次 | **每次到访只能用一个可选动作** | `GPlayer.*Visited` 共 11 个字段 | ✅ 规则已实现（`optionUsedThisTurn`）；⚠️ 原版"每建筑一个 visited 字段"的**语义仍无法证实**（那些字段全仓库无读写点） |
 | 12 | 收入夹取 | — | **被夹取时不触发银行家「钱生钱」** | `ChangeRes` 的 `flag` 语义 | ⚠️ 待确认 |
 | 13 | 检察官贿赂 | 未实现 | **每 2 点罪恶 +1 贿赂**（而非每点） | `GetBribe` 的 Judge 分支 | ✅ **已修**（`judgeJustice`，`perMalice = 1/2`）。本条原标"未实现"**已过时** |
-| 14 | 政治家「呼吸税」 | 未实现 | **镇长是政治家时，全员贿赂 +5** | `GetBribe` 的 `Breathing_Tax` 分支 | ❌ **仍缺**（引擎内无命中） |
+| 14 | 政治家「呼吸税」 | 未实现 | **镇长是政治家时，全员贿赂 +5** | `GetBribe` 的 `Breathing_Tax` 分支 | ✅ **已修**（`breathingTaxFrom`）。本条原标"未实现"**已过时** |
 
 ### 3.3 遗漏的动作
 
@@ -782,3 +827,4 @@ Banker_Money_Makes_Money       银行家·钱生钱（旧版）
 4. **把所有建筑的"每次到访一次"落实**（第 11 项）。
 5. **按 `行动卡.md` 逐张核对卡牌效果**，以文档为准。
 6. 最后处理回合流程与解析顺序（受反编译范围所限，需交叉验证）。
+

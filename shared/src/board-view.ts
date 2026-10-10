@@ -137,28 +137,56 @@ export function computeReachableTiles(
   view: BoardViewData,
   startId: string,
   steps: number,
-  _reverse?: boolean,
+  reverse = false,
 ): Map<string, string[]> {
   const result = new Map<string, string[]>();
   if (steps <= 0) return result;
-  let current = new Map<string, string[]>([[startId, []]]);
-  for (let i = 0; i < steps; i++) {
-    const next = new Map<string, string[]>();
-    for (const [tileId, path] of current) {
-      const tile = view.byId.get(tileId);
+  const start = view.byId.get(startId);
+  if (!start) return result;
+
+  // BFS 逐层展开
+  // 原版规则（GMap.cs:152-170）：路径上经过的建筑可以中途停下，
+  // 所以 1..N-1 步到达的建筑也加入可选目的地
+  let frontier: Array<{ id: string; path: string[] }> = [{ id: startId, path: [] }];
+  for (let step = 0; step < steps; step++) {
+    const next: Array<{ id: string; path: string[] }> = [];
+    for (const node of frontier) {
+      const tile = view.byId.get(node.id);
       if (!tile) continue;
-      for (const nb of tile.out) {
-        if (!next.has(nb)) next.set(nb, [...path, nb]);
+      const outs = reverse ? tile.in : tile.out;
+      for (const nb of outs) {
+        if (!view.byId.has(nb)) continue;
+        next.push({ id: nb, path: [...node.path, nb] });
       }
     }
-    current = next;
+    if (!next.length) break;
+    frontier = next;
+
+    // 中途建筑：1..N-1 步到达的建筑也作为可选目的地
+    if (step < steps - 1) {
+      for (const node of frontier) {
+        const tile = view.byId.get(node.id);
+        if (tile?.isBuilding && !result.has(node.id)) {
+          result.set(node.id, node.path);
+        }
+      }
+    }
   }
-  return current;
+
+  // 最后一步：所有可达格子（含建筑和站点）都加入
+  for (const node of frontier) {
+    if (!result.has(node.id)) result.set(node.id, node.path);
+  }
+  return result;
 }
 
-/** 卡牌实际移动步数 */
+/** 用这张牌移动的步数 */
 export function cardMoveSteps(cardId: string): number {
-  return CARD_BY_ID[cardId]?.move ?? 0;
+  const card = CARD_BY_ID[cardId];
+  if (!card) return 0;
+  // 骰子移动牌（a022 装腔作势）：move=0 但实际掷骰决定步数，预览时用最大值 6
+  if (card.move === 0 && isDiceMoveCard(cardId)) return 6;
+  return card.move ?? 0;
 }
 
 /** 是否为掷骰移动牌（move=0 + specialMove + ROLL["Move"]） */
@@ -183,6 +211,8 @@ export function centralMisfortuneId(_map: BoardMap): string | undefined {
 }
 
 /** 是否为反向移动牌 */
-export function isReverseMoveCard(_cardId: string): boolean {
-  return false;
+export function isReverseMoveCard(cardId: string): boolean {
+  const card = CARD_BY_ID[cardId];
+  if (!card) return false;
+  return card.actions?.some((a: any) => a.type === 'Move_Back') ?? false;
 }

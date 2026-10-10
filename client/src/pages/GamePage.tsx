@@ -257,14 +257,13 @@ export function GamePage() {
       {/* 手牌 */}
       <div className="hand">
         {myHand.map((cardId) => {
+          const isMovePhase = prompt?.type === 'select_move_card';
+          const isPlayPhase = prompt?.type === 'play_card_or_skip';
           const playable = isMyTurn && (
             (isMovePhase && playableCardIds.has(cardId)) ||
             (isPlayPhase && playableCardIds.has(cardId))
           );
           const isSelected = selectedCardId === cardId;
-          const isMovePhase = prompt?.type === 'select_move_card';
-          const isPlayPhase = prompt?.type === 'play_card_or_skip';
-          // 移动后：只有能在当前格打出（类型匹配+付得起）的牌才高亮
           const highlight = isPlayPhase && playable;
           return (
             <Card

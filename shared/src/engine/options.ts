@@ -332,7 +332,21 @@ function stationOptions(
       break;
     }
 
-    // 冒险格（Danger）：落地时强制弹窗处理保险+掷骰，不在此处展示可选动作
+    // 冒险格：买保险（Param1=40，收藏家角色优惠→10）
+    case 'Danger': {
+      let cost = pr[0] || 40;
+      for (const a of abilitiesOf(p)) {
+        if (a.flag === 'insuranceDiscount') cost = a.nums?.[0] ?? 10;
+      }
+      out.push({
+        id: 'danger.insure',
+        label: `买保险 ${cost} 金`,
+        description,
+        affordable: p.res.money >= cost,
+        reason: p.res.money >= cost ? undefined : `需要 ${cost} 金钱`,
+      });
+      break;
+    }
 
     // 风险格（赌博站）：可选掷骰试手气
     case 'Risk': {

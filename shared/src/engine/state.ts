@@ -413,10 +413,16 @@ export function startMove(
   // 「停止」（免厄运）都要先于结算生效。印花税等即时收益也在这里结算。
   fireAbility(state, p.id, 'afterMove', { steps: path.length, cellId: p.cellId });
 
-  // pass-through 只结算途经格（不含终点——终点由 UseCell 阶段处理）
+  // pass-through 只结算途经格（不含终点——终点由 landing 处理）
   resolvePassThrough(state, p, path.slice(0, -1), mvFlags);
-  // 标记：终点格效果尚未结算（等 UseCard 阶段结束后才进入 UseCell）
-  p.flags['cellResolved'] = 0;
+  // 终点格效果在 Move 阶段立即结算（站点效果：收入/贿赂/警察/厄运/冒险/地狱）
+  if (!p.flags['ignoreCell']) {
+    const pending = resolveLanding(state, p);
+    if (pending) {
+      state.pending = pending;
+      return { ok: true, path, pending };
+    }
+  }
 
   return { ok: true, path };
 }

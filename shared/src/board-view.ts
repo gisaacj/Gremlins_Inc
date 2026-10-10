@@ -6,7 +6,7 @@
 // =============================================================
 import type { BoardCell, BoardMap, CellTypeName } from './gamedata/index.js';
 import {
-  CELL_TYPE_BY_ID, CUSTOM_MAP, CUSTOM_POS,
+  CELL_TYPE_BY_ID, CUSTOM_MAP, CUSTOM_POS, CARD_BY_ID,
 } from './gamedata/index.js';
 
 // 棋盘相关的原版类型一并 re-export
@@ -158,17 +158,23 @@ export function computeReachableTiles(
 
 /** 卡牌实际移动步数 */
 export function cardMoveSteps(cardId: string): number {
-  return 0;
+  return CARD_BY_ID[cardId]?.move ?? 0;
 }
 
-/** 是否为掷骰移动牌 */
+/** 是否为掷骰移动牌（move=0 + specialMove + ROLL["Move"]） */
 export function isDiceMoveCard(cardId: string): boolean {
-  return false;
+  const c = CARD_BY_ID[cardId];
+  if (!c) return false;
+  if (c.move > 0 || !c.specialMove) return false;
+  return c.actions?.some((a: any) => a.type === 'ROLL' && a.params?.[0] === 'Move') ?? false;
 }
 
-/** 是否为弃牌移动牌 */
+/** 是否为弃牌移动牌（move=0 + specialMove + Discard["Move"]） */
 export function isDiscardMoveCard(cardId: string): boolean {
-  return false;
+  const c = CARD_BY_ID[cardId];
+  if (!c) return false;
+  if (c.move > 0 || !c.specialMove) return false;
+  return c.actions?.some((a: any) => a.type === 'Discard' && a.params?.[0] === 'Move') ?? false;
 }
 
 /** 中央厄运格 id */

@@ -603,12 +603,16 @@ export function runAIPlayers(state: EngineState, maxSteps = 400): AIStep[] {
     const actor = state.pending ? state.pending.playerId : currentPlayerId(state);
     const p = getPlayer(state, actor);
     if (!p?.isAI) break;
-    const before = state.log.length;
-    const beforeRound = state.round;
+    // ⚠️ 变化判据用 **progress**（只增不减），不能用 `state.log.length`：
+    // 日志有 400 条上限，长局中长度恒定，`before === after` 永远成立，
+    // 保险会每一轮都误触发、AI 刚动一步就被强制结束回合 ——
+    // 用户报的"AI 经常走着走着不动了"。`round` 同样不可靠
+    // （一轮内多次行动时它不变）。
+    const before = state.progress ?? 0;
     out.push(...defaultAI.act(state, actor));
     steps++;
     // 保险：什么都没变就强制推进，避免卡死
-    if (state.log.length === before && state.round === beforeRound && isTurn(state, actor)) {
+    if ((state.progress ?? 0) === before && isTurn(state, actor)) {
       if (state.pending) {
         const pend = state.pending;
         answerChoice(state, pend.playerId, pend.options.slice(0, 1).map((o) => o.value));

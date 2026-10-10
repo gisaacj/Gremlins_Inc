@@ -181,11 +181,14 @@ export class LocalGame {
       const actor = this.state.pending
         ? this.state.pending.playerId
         : currentPlayerId(this.state);
-      const before = JSON.stringify(this.state.log.length) + this.state.round + actor;
+      // ⚠️ 变化判据用 **progress**（只增不减），不能用 `log.length`：
+      // 日志上限 400，长局中长度恒定 → 保险每轮误判"什么都没变"，
+      // AI 刚动一步就被强制结束回合（用户报的"走着走着不动了"）。
+      const before = this.state.progress ?? 0;
       this.think(this.state, actor);
       steps++;
       // 保险：若这一轮什么都没变，强制结束该 AI 回合，避免卡死
-      const after = JSON.stringify(this.state.log.length) + this.state.round + actor;
+      const after = this.state.progress ?? 0;
       if (before === after) {
         if (this.state.pending) {
           // 决策没被消费，取第一个选项兜底

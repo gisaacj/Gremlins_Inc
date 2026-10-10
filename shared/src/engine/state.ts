@@ -232,7 +232,24 @@ function applyStartPassives(state: EngineState, p: EnginePlayer): void {
   fireAbility(state, p.id, 'gameStart');
 }
 
+/**
+ * 单调递增的"进度计数"。
+ *
+ * ⚠️ 为什么需要它：AI 驱动的"防卡死"保险原本用 `state.log.length` 判断
+ * "这一轮有没有变化"，但 **`state.log` 有 400 条上限**（超过就 `shift()`），
+ * 于是长局中 `log.length` 恒为 400、`before === after` 永远成立 ——
+ * 保险被**每一轮都误触发**，AI 刚做一步就被强制结束回合。
+ * 用户报的"AI 经常走着走着不动了"就是这个（长局才明显，短局看不出）。
+ *
+ * 本函数在每次状态变化时被调用，同时也让日志条数继续推进。
+ */
+export function bumpProgress(state: EngineState, playerId: string, text: string): void {
+  state.progress = (state.progress ?? 0) + 1;
+  pushLog(state, playerId, text);
+}
+
 function pushLog(state: EngineState, playerId: string, text: string): void {
+  state.progress = (state.progress ?? 0) + 1;
   state.log.push({ round: state.round, playerId, text, ts: Date.now() });
   if (state.log.length > 400) state.log.shift();
 }
@@ -2233,6 +2250,10 @@ export function endTurn(state: EngineState): void {
 
   // 胜利检查
   checkVictory(state);
+
+  // 换人本身就是一次状态推进 —— 必须让进度计数前进，
+  // 否则 AI 的防卡死保险会把"成功换人"误判成"什么都没变"。
+  state.progress = (state.progress ?? 0) + 1;
 }
 
 export function checkVictory(state: EngineState): void {

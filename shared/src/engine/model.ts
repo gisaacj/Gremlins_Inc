@@ -86,8 +86,30 @@ export interface EnginePlayer {
   secrets: string[];
 
   inJail: boolean;
-  /** 监狱进度：还需服刑的走牌次数 */
+  /**
+   * 剩余刑期（走牌次数）。对应原版 `GPlayer.JailTerm`。
+   *
+   * ⚠️ 注意与原版 `GPlayer.Resources.Term`（**监狱经验**）区分：
+   * 这里是"还要坐几回合"，不是等级进度。原版两个字段并存，
+   * 本项目把"经验"放在 `jailExp`。
+   */
   term: number;
+  /**
+   * 监狱等级 0..4（新手 / 农民 / 恶棍 / 二把手 / 老大）。
+   * 对应原版 `GPlayer.JailRank`。
+   */
+  jailRank: number;
+  /**
+   * 当前等级内累积的**监狱经验**。对应原版 `GPlayer.Resources.Term`。
+   * 每在狱中待一回合 +1；达到该等级门槛就升级并清零。
+   */
+  jailExp: number;
+  /**
+   * 本回合的**监狱表现**：-1 消极 / 0 中性 / +1 积极。
+   * 对应原版 `GPlayer.JailKarma`，决定本回合能抽到哪一档监狱牌
+   * （`GJailCard.Karma`）。默认 0（中性）。
+   */
+  jailKarma?: number;
   /** 跳过接下来的 N 次走牌 */
   skipTurns: number;
   /** 本回合剩余的额外走牌次数 */

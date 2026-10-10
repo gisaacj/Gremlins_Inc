@@ -108,6 +108,8 @@ function buildPlayer(
     secrets: [],
     inJail: false,
     term: 0,
+    jailRank: 0,
+    jailExp: 0,
     skipTurns: 0,
     extraTurns: 0,
     lastMoveSteps: 0,
@@ -561,6 +563,11 @@ export function resolvePending(
   // 移动选路是特殊挂起：由 startMove 自己续跑，不走动作解释器
   if (pending.kind.startsWith('moveBranch:')) {
     return resolveMoveBranch(state, playerId, answer[0]);
+  }
+
+  // 监狱服刑：从候选监狱牌里选一张（或全部拒绝），不走动作解释器
+  if (pending.kind === JAIL_PICK_KIND) {
+    return resolveJailPick(state, playerId, answer[0] ?? 'jailDecline');
   }
 
   // 弃牌移动（a059 二手货）：玩家选了对手，随机弃对手一张牌，
@@ -1277,22 +1284,160 @@ export function bribeAmount(state: EngineState, p: EnginePlayer): number {
  *
  * 本实现按 jail card 的 `actions` 驱动；牌堆耗尽时用 ID 重洗。
  */
-export function takeJailTurn(state: EngineState, playerId: string): { ok: boolean; reason?: string; pending?: PendingChoice } {
+/** 本回合抽出的监狱牌候选（挂起期间暂存） */
+export interface JailCandidate {
+  cardId: string;
+  name: string;
+  description: string;
+}
+
+/** 挂起项的 kind：等待玩家从监狱牌候选中选一张 */
+export const JAIL_PICK_KIND = 'jailPick';
+
+/**
+ * 服刑一回合。
+ *
+ * 原版流程（`GGame.JailPickCard` + `GPlayer.GetJailCardLimit` + `GJailCard.Rank/Karma`）：
+ *  1. 本回合先从牌堆抽出 `GetJailCardLimit()`（2/2/3/3/4）张**候选**；
+ *  2. 玩家从中选一张结算；
+ *  3. 无论选哪张，本回合都算服完一次：刑期 −1、监狱经验 +1。
+ *
+ * 卡池受 `Rank`（达到该监狱等级才解锁）与 `Karma`（监狱表现）约束；
+ * 通关方式是把当回合所有候选牌都拒绝（`jailDecline`）。
+ *
+ * 本函数只负责第 1 步 + 挂起；结算在 `resolveJailPick`。
+ * 若只抽到单张候选，则不挂起、直接结算（省一次交互）。
+ */
+export function takeJailTurn(
+  state: EngineState,
+  playerId: string,
+): { ok: boolean; reason?: string; pending?: PendingChoice } {
   const p = getPlayer(state, playerId);
   if (!p) return { ok: false, reason: '玩家不存在' };
   if (!p.inJail) return { ok: false, reason: '该玩家不在狱中' };
   if (state.pending) return { ok: false, reason: '有未完成的决策' };
 
-  if (state.jailDeck.length === 0) state.jailDeck = JAIL_CARDS.map((c) => c.id);
-  const id = state.jailDeck.pop();
-  if (!id) return { ok: false, reason: '监狱牌堆为空' };
-  // 注意：监狱牌不入 action card 的弃牌堆——它有自己的 jailDeck，
-  // 会自动重洗。推入 state.discard 会让非行动卡 id 污染主牌堆。
+  const candidates = drawJailCandidates(state, p);
+  if (!candidates.length) {
+    // 牌堆异常时兜底：直接推进刑期
+    pushLog(state, p.id, '服刑：没有可选的监狱牌');
+    advanceJailTerm(state, p);
+    endTurn(state);
+    return { ok: true };
+  }
 
-  const card = JAIL_CARDS.find((c) => c.id === id);
+  if (candidates.length === 1) {
+    return resolveJailPick(state, playerId, candidates[0].cardId);
+  }
+
+  const pending: PendingChoice = {
+    kind: JAIL_PICK_KIND,
+    playerId: p.id,
+    prompt: `服刑（等级 ${p.jailRank}·${JAIL_RANK_NAMES[p.jailRank]}）：`
+      + `从 ${candidates.length} 张监狱牌中选一张，或全部拒绝`,
+    options: [
+      ...candidates.map((c) => ({ value: c.cardId, label: `${c.name}——${c.description}` })),
+      { value: 'jailDecline', label: '全部拒绝（刑期 −1，+1 罪恶）' },
+    ],
+    min: 1,
+    max: 1,
+    resume: { actions: [], index: 0, targets: [p.id], source: '监狱服刑', ownerId: p.id },
+  };
+  state.pending = pending;
+  state.pendingInput = {
+    ...(state.pendingInput ?? {}),
+    [JAIL_PICK_KIND]: JSON.stringify(candidates),
+  };
+  pushLog(state, p.id,
+    `服刑：可选的监狱牌 ${candidates.map((c) => `「${c.name}」`).join('')}`);
+  return { ok: true, pending };
+}
+
+/**
+ * 抽出本回合的监狱牌候选。
+ *
+ * 卡池受两级约束（原版 `GJailCard.Rank` / `Karma`）：
+ *  - `Rank` 是**解锁等级**：`rank <= JailRank` 才能出现
+ *  - `Karma` 是**监狱表现**：`-1` 消极 / `0` 中性 / `+1` 积极；
+ *    本回合表现等于 `p.jailKarma` 的牌才进池
+ *
+ * 同名卡按 `deckCount` 重复出现（牌堆按 DeckCount 构造）。
+ */
+function drawJailCandidates(state: EngineState, p: EnginePlayer): JailCandidate[] {
+  if (state.jailDeck.length === 0) {
+    // 重洗：按 DeckCount 重复放入
+    state.jailDeck = [];
+    for (const c of JAIL_CARDS) {
+      for (let i = 0; i < Math.max(1, c.deckCount); i++) state.jailDeck.push(c.id);
+    }
+  }
+  const want = jailCardLimit(p.jailRank);
+  const out: JailCandidate[] = [];
+  const skipped: string[] = [];
+
+  // 从牌堆尾部依次取，取到 want 张"符合条件"的为止
+  let guard = 0;
+  while (out.length < want && state.jailDeck.length > 0 && guard++ < 200) {
+    const id = state.jailDeck.pop()!;
+    const c = JAIL_CARDS.find((x) => x.id === id);
+    if (!c) continue;
+    // Rank 是解锁等级；Karma 是本回合表现（默认 0=中性）
+    const karma = p.jailKarma ?? 0;
+    if ((c.rank ?? 1) > p.jailRank + 1 || (c.karma ?? 0) !== karma) {
+      skipped.push(id);   // 本轮不适用，之后重洗会再轮到
+      continue;
+    }
+    out.push({ cardId: c.id, name: c.text.name, description: c.text.description });
+  }
+  // 不适用的牌放回牌堆（保持牌数守恒）
+  state.jailDeck.unshift(...skipped);
+
+  if (!out.length) {
+    // 该表现下没有可用牌：退回"不用 Karma 过滤"再抽一轮，避免卡死
+    const fallback: JailCandidate[] = [];
+    let g2 = 0;
+    while (fallback.length < want && state.jailDeck.length > 0 && g2++ < 200) {
+      const id = state.jailDeck.pop()!;
+      const c = JAIL_CARDS.find((x) => x.id === id);
+      if (!c) continue;
+      if ((c.rank ?? 1) > p.jailRank + 1) { state.jailDeck.unshift(id); continue; }
+      fallback.push({ cardId: c.id, name: c.text.name, description: c.text.description });
+    }
+    return fallback;
+  }
+  return out;
+}
+
+/**
+ * 结算玩家选定的监狱牌（或"全部拒绝"）。
+ *
+ * @param cardId 选中的监狱牌 id；`'jailDecline'` 表示全部拒绝
+ */
+export function resolveJailPick(
+  state: EngineState,
+  playerId: string,
+  cardId: string,
+): { ok: boolean; reason?: string; pending?: PendingChoice } {
+  const p = getPlayer(state, playerId);
+  if (!p) return { ok: false, reason: '玩家不存在' };
+
+  // 挂起期间暂存的候选项用完即清
+  if (state.pendingInput?.[JAIL_PICK_KIND]) delete state.pendingInput[JAIL_PICK_KIND];
+  state.pending = undefined;
+
+  if (cardId === 'jailDecline') {
+    // 原版 `CellType_Jail_Decline_Final`：拒绝全部候选 → +1 罪恶、刑期 −1
+    addRes(p, 'malice', 1);
+    pushLog(state, p.id, '拒绝所有监狱牌：+1 罪恶，刑期 −1');
+    advanceJailTerm(state, p);
+    endTurn(state);
+    return { ok: true };
+  }
+
+  const card = JAIL_CARDS.find((c) => c.id === cardId);
   if (!card) return { ok: false, reason: '监狱卡不存在' };
 
-  pushLog(state, p.id, `服刑：抽出监狱卡「${card.text.name}」—— ${card.text.description}`);
+  pushLog(state, p.id, `服刑：使用监狱卡「${card.text.name}」—— ${card.text.description}`);
 
   // 按卡牌自身的收入/结果结算
   if (card.income) applyBundle(state, p, card.income, +1, '监狱卡收获');
@@ -1314,21 +1459,106 @@ export function takeJailTurn(state: EngineState, playerId: string): { ok: boolea
     }
   }
 
-  // 刑期推进：无论卡牌效果如何，本回合都已完成一次服刑
-  if (p.inJail) {
-    p.term = Math.max(0, p.term - 1);
-    if (p.term === 0) {
-      release(state, p);
-    } else {
-      pushLog(state, p.id, `服刑中，剩余刑期 ${p.term} 次走牌`);
-    }
+  // 刑期推进 + 监狱经验（无论卡牌效果如何，本回合都已完成一次服刑）
+  advanceJailTerm(state, p);
+  endTurn(state);
+  return { ok: true };
+}
+
+/**
+ * 推进一次服刑：刑期 −1，并按原版累积**监狱经验**
+ * （教程："每在狱中待一回合获得 1 点监狱经验"）。
+ */
+function advanceJailTerm(state: EngineState, p: EnginePlayer): void {
+  if (!p.inJail) return;
+  p.term = Math.max(0, p.term - 1);
+  gainJailExp(state, p, 1);
+  if (p.term === 0) {
+    release(state, p);
+  } else {
+    pushLog(state, p.id,
+      `服刑中，剩余刑期 ${p.term} 次走牌（等级 ${p.jailRank}`
+      + `${JAIL_RANK_NAMES[p.jailRank]}，经验 ${p.jailExp}/${jailExpForRank(p.jailRank)}）`);
+  }
+}
+
+/**
+ * 监狱等级 0..4 的名称（原版 `JailRankDetailsPanel`）。
+ * 0 新手 / 1 农民 / 2 恶棍 / 3 二把手 / 4 老大
+ */
+export const JAIL_RANK_NAMES = ['新手', '农民', '恶棍', '二把手', '老大'] as const;
+
+/** 最高监狱等级（"老大"） */
+export const JAIL_RANK_MAX = 4;
+
+/**
+ * 升到**下一级**所需的监狱经验。对应原版
+ * `GConst.JAIL_RANK_1_TERM..JAIL_RANK_5_TERM` = 5 / 7 / 8 / 10 / 3。
+ *
+ * 语义来自 `GPlayer.ChangeRes` 的 `Term` 分支：
+ * 经验累加到该门槛 → 扣掉门槛、`JailRank++`；
+ * 已经是最高级（rank 4）时再满 → 换成 **+1 齿轮**。
+ */
+export function jailExpForRank(rank: number): number {
+  return constNum(`JAIL_RANK_${Math.min(rank, JAIL_RANK_MAX) + 1}_TERM`, 5);
+}
+
+/**
+ * 本回合可**选择**的监狱牌张数。对应原版 `GPlayer.GetJailCardLimit()`：
+ * `n = 2; if (rank >= 2) n++; if (rank >= 4) n++;` → **2 / 2 / 3 / 3 / 4**
+ */
+export function jailCardLimit(rank: number): number {
+  let n = 2;
+  if (rank >= 2) n += 1;
+  if (rank >= 4) n += 1;
+  return n;
+}
+
+/**
+ * 给玩家加监狱经验，按原版规则处理升级与"满级换齿轮"。
+ *
+ * @returns 本次是否升级、以及满级换到的齿轮数
+ */
+export function gainJailExp(
+  state: EngineState,
+  p: EnginePlayer,
+  amount = 1,
+): { rankedUp: number; scoreGained: number } {
+  if (amount <= 0) return { rankedUp: 0, scoreGained: 0 };
+  p.jailExp += amount;
+  let rankedUp = 0;
+  let scoreGained = 0;
+
+  // 升级阶段：经验累加到门槛 → 扣门槛、rank++
+  // 用循环是因为一次可能加多点，可以连升（`guard` 防意外死循环）
+  let guard = 0;
+  while (p.jailRank < JAIL_RANK_MAX
+    && p.jailExp >= jailExpForRank(p.jailRank)
+    && guard++ < 64) {
+    p.jailExp -= jailExpForRank(p.jailRank);
+    p.jailRank += 1;
+    rankedUp += 1;
+    pushLog(state, p.id,
+      `监狱等级提升到 ${p.jailRank}（${JAIL_RANK_NAMES[p.jailRank]}），`
+      + `下一级需 ${jailExpForRank(p.jailRank)} 点经验`);
   }
 
-  // 原版规则：服刑 = 一回合一次，结束后自动换人
-  // 监狱中不补牌（!p.inJail 检查），但正常结束回合让其他玩家行动
-  endTurn(state);
-
-  return { ok: true };
+  // 满级（老大）之后：经验不再有升级去向，按门槛**折算成齿轮**。
+  // 一次结算完并让经验保持在门槛以下，避免无限累积
+  // （曾经的写法只 +1 而不扣经验，10 万点会滚到 99790）。
+  if (p.jailRank >= JAIL_RANK_MAX) {
+    const need = jailExpForRank(JAIL_RANK_MAX);
+    const times = Math.floor(p.jailExp / need);
+    if (times > 0) {
+      p.jailExp -= times * need;
+      addRes(p, 'score', times);
+      scoreGained += times;
+      pushLog(state, p.id,
+        `监狱经验已满且为最高等级「${JAIL_RANK_NAMES[JAIL_RANK_MAX]}」：`
+        + `${times * need} 点经验折算为 +${times} 齿轮`);
+    }
+  }
+  return { rankedUp, scoreGained };
 }
 
 /** 应用资源包（sign=+1 收获 / -1 惩罚） */

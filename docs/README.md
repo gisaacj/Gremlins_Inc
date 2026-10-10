@@ -397,6 +397,37 @@ import 了 `interp.ts`，反向依赖会**形成循环**，改为就地一行判
 
 ---
 
+## 本轮：真实 socket 端到端（"能联机玩"的直接证据）
+
+之前所有集成测试都是**直接调用服务端函数**（`server-integration.test.ts`），
+不经过网络。这轮补上**真启动服务器 + 真连 socket.io 客户端**的端到端。
+
+新增 `tools/socket-e2e.mjs`（`node --use-system-ca tools/socket-e2e.mjs`，约 30 秒）：
+
+| 阶段 | 验证内容 |
+|---|---|
+| 启动 | 服务器起来，`/api/health` 通过 |
+| 连接 | 两个独立 socket 客户端连上 |
+| 建房 | A `room:create` 拿到 roomId，B `room:join` |
+| 选角 | **两阶段**：`room:start` → 切 `character_select` 并下发 `charOptions` → 各自选角 → 再次 `room:start` 真正开局 |
+| 对局 | 双方按 `game:prompt` 自动应答，实际跑起来 |
+
+实测结果：**200 次状态更新 / 199 次客户端操作 / 推进到第 45 回合**，10 项断言全通过。
+
+### 顺带写清了两件事
+
+1. **开局是两阶段的**：`room:start` 第一次只切到选角阶段（下发
+   `charOptions`），选完再 `room:start` 才真正 `startGame`。
+   我第一版测试按"一次 start 就开局"写，卡在这里。
+2. **客户端 emit 与服务端处理完全对齐**：逐条比对
+   `C2SEvents` 声明（18 个）、客户端 `emit`（18 个）、服务端 `.on` 注册（19 个，
+   多一个 `disconnect`），**未覆盖 0 个**。
+
+（另：`LobbyState.players[i].charOptions` 是**本玩家**的可选角色，
+不是全局角色池。）
+
+---
+
 ## 一、重要前提：反编译范围的边界 ⚠️
 
 **必须先读这一节**，否则会误判文档的权威程度。

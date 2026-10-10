@@ -12,6 +12,46 @@
 
 
 
+
+### 第 20 轮：AI 长局卡死 + 回合内执行顺序确认
+
+#### 一、执行顺序（用户描述，已用测试钉住）
+
+```
+移动 → 判断是否冲突 → 看是否有可打的牌 → 执行建筑/站点效果
+```
+
+角色技能按各自描述的时机触发（`fireAbility` 的 event 字段：`turnStart` /
+`afterMove` / `afterRoll` / `turnEnd` / `gameStart` / `afterPlayCard` …）。
+
+实测确认（`turn-order.test.ts`，11 项）：
+- Move 后落点已定，但**站点效果尚未结算**（金钱不变、`pendingCellEffect` 已登记）
+- 对手在目标格 → **先**挂起 conflict；实测链 `conflict → conflict → police:P0`
+- 建筑可容纳多人 → 不引发交锋
+- UseCard 阶段站点仍未结算；无牌可打时自动跳过（第 19 轮的 bug #9）
+- UseCell 阶段才结算（收入格 +60）并给出建筑可选动作
+- `skipPlay` 与 `nextTurn` 两条路径结算结果一致
+
+#### 二、AI「走着走着不动了」——日志上限导致防卡死保险误触发
+
+两个 AI 驱动的防卡死保险都用 `state.log.length` 判断"这一轮有没有变化"，
+但 **`state.log` 有 400 条上限**（超过就 `shift()`）→ 长局中 `log.length`
+恒为 400、`before === after` **永远成立** → 保险每轮误触发，AI 刚做一步就被
+强制结束回合。**短局看不出，长局才明显**，正好符合"走着走着就不动了"。
+
+`LocalGame.runAI` 更糟：它把 `log.length` 拼进判据字符串，饱和后同样恒等。
+
+**修复**：`EngineState` 新增 **`progress`**（只增不减的进度计数，
+`pushLog()` 与 `endTurn()` 都会推进），两个 AI 驱动的判据改用它。
+
+> ⚠️ 不能用 `round` 替代：一轮内有多次行动时 `round` 不变，
+> 会把正常的多次行动误判成"卡死"。
+
+**验证**：`state.log` 饱和到 400 后 `progress` 仍正常递增；
+对局模拟 5 个 seed × 3 人局全部正常结束、0 错误。
+
+---
+
 ### 第 19 轮：用户第三批问题（9 个，全部修复）
 
 | # | 问题 | 根因 | 修复 |

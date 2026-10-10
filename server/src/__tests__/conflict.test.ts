@@ -55,8 +55,16 @@ function setup(bidA: number, bidB: number, maliceA = 0, maliceB = 0) {
 }
 
 /** 走完一场交锋 */
+/** 走完一场交锋
+ *
+ * 注意：**清空双方手牌**。若赢家手里有带 `[i]` 段的卡（a070/a099），
+ * 结算会在"付款前"挂起询问是否打出——那是 `conflict-hand-cards.test.ts`
+ * 的测试对象。这里只验基础结算，所以先把干扰因素去掉。
+ */
 function fight(bidA: number, bidB: number, maliceA = 0, maliceB = 0) {
   const { st, a, b } = setup(bidA, bidB, maliceA, maliceB);
+  a.hand = [];
+  b.hand = [];
   answer(st, String(bidA));
   answer(st, String(bidB));
   return { st, a, b };

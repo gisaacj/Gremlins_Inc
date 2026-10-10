@@ -9,15 +9,16 @@ import type {
   ActionCard, BoardCell, CardAction, EnginePlayer, EngineState, PendingChoice, ResourceKey,
 } from './model.js';
 import {
-  ACTION_CARDS, CARD_BY_ID, CELL_TYPES, CELL_TYPE_BY_ID, CHARACTERS, CHARACTER_BY_ID,
-  CHAOS_CARDS, CELL_TYPE_BY_NAME, GAME_CONST, JAIL_CARDS, MISFORTUNE_CARDS,
-  CUSTOM_MAP, NORMAL_MAP, cellLabel, cellTypeOf, characterName, getCell, getMap, getPlayer,
+  ACTION_CARDS, CARD_BY_ID, CARD_BY_NAME, CELL_TYPES, CELL_TYPE_BY_ID, CHARACTERS,
+  CHARACTER_BY_ID, CHAOS_CARDS, CELL_TYPE_BY_NAME, GAME_CONST, JAIL_CARDS,
+  MISFORTUNE_CARDS, CUSTOM_MAP, NORMAL_MAP, cellLabel, cellTypeOf, characterName,
+  getCell, getMap, getPlayer,
 } from './model.js';
 import {
   ELECTION_INTERVAL, arrest, discardFromHand, drawMisfortune, drawTo, random, release,
   rollDice, runActions, runElection, type ActionContext,
 } from './interp.js';
-import { addRes } from './resources.js';
+import { addRes, transferRes } from './resources.js';
 import {
   applyImmediatePermanents, discardPermanent, extraBribeFrom, fireTrigger,
 } from './permanents.js';
@@ -593,6 +594,11 @@ export function resolvePending(
   // 监狱服刑：从候选监狱牌里选一张（或全部拒绝），不走动作解释器
   if (pending.kind === JAIL_PICK_KIND) {
     return resolveJailPick(state, playerId, answer[0] ?? 'jailDecline');
+  }
+
+  // 交锋胜出：是否打出手中的 `[i]` 卡（a070 / a099）
+  if (pending.kind === CONFLICT_CARD_KIND) {
+    return resolveConflictCard(state, playerId, answer[0] ?? 'decline');
   }
 
   // 弃牌移动（a059 二手货）：玩家选了对手，随机弃对手一张牌，
@@ -1220,49 +1226,175 @@ export function resolveConflictBid(
   // 双方出价齐了 → 结算
   const bidA = Number(store[`${key}:${challenger.id}`] ?? 0);
   const bidB = Number(store[`${key}:${defender.id}`] ?? 0);
-  settleConflict(state, challenger, defender, bidA, bidB, playerId === challenger.id ? defender.id : challenger.id);
+  const pending = settleConflict(state, challenger, defender, bidA, bidB);
   delete store[`${key}:${challenger.id}`];
   delete store[`${key}:${defender.id}`];
-  return { ok: true };
+  // 赢家手里有 `[i]` 卡时会挂起让他选择（a070 / a099）
+  return pending ? { ok: true, pending } : { ok: true };
 }
 
 /** 结算：高者付款留下，低者被逮捕；平局比罪恶（少者胜）。 */
+/**
+ * 判定交锋胜负。
+ *
+ * 原版规则：出价高者胜；**平局时罪恶较少者胜**（这条是交锋专属，
+ * 与选举的"罪恶最低者得票"是两套独立规则，不要互相外推）。
+ *
+ * 只做判定，**不产生副作用**——这样调用方可以在"扣款前后插入玩家选择"，
+ * 用于卡牌的 `[i]`（留在手中、交锋时触发）效果。
+ */
+function decideConflict(
+  challenger: EnginePlayer,
+  defender: EnginePlayer,
+  bidA: number,
+  bidB: number,
+): { winner: EnginePlayer; loser: EnginePlayer; winningBid: number; tie: boolean } {
+  if (bidA === bidB) {
+    // 平局：罪恶最少者获胜
+    const winner = challenger.res.malice <= defender.res.malice ? challenger : defender;
+    const loser = winner.id === challenger.id ? defender : challenger;
+    return { winner, loser, winningBid: bidA, tie: true };
+  }
+  if (bidA > bidB) return { winner: challenger, loser: defender, winningBid: bidA, tie: false };
+  return { winner: defender, loser: challenger, winningBid: bidB, tie: false };
+}
+
+/** 某个玩家手里是否有带 `[i]`（交锋时可用）的卡；返回第一张 */
+function findConflictHandCard(p: EnginePlayer): string | undefined {
+  return p.hand.find((id) => CARD_BY_ID[id]?.handText);
+}
+
+/** 挂起 kind：交锋结算前，赢家可以打出手中的 `[i]` 卡 */
+export const CONFLICT_CARD_KIND = 'conflictCard';
+
+/**
+ * 结算交锋（判定 → 赢家付款 → 统计 → 钩子 → 输家被捕）。
+ *
+ * @param allowHandCard 赢家若持有 `[i]` 卡，是否先挂起让他选择
+ * @returns 需要玩家决策时返回挂起项
+ */
 function settleConflict(
   state: EngineState,
   challenger: EnginePlayer,
   defender: EnginePlayer,
   bidA: number,
   bidB: number,
-  lastBidderId: string,
-): void {
-  // 平局：罪恶最少者获胜
-  let winner: EnginePlayer;
-  let loser: EnginePlayer;
-  let winningBid: number;
-  if (bidA === bidB) {
-    winner = challenger.res.malice <= defender.res.malice ? challenger : defender;
-    loser = winner.id === challenger.id ? defender : challenger;
-    winningBid = bidA;
+): PendingChoice | undefined {
+  const { winner, loser, winningBid, tie } = decideConflict(challenger, defender, bidA, bidB);
+
+  if (tie) {
     pushLog(state, winner.id,
       `交锋平局（各出价 ${bidA}）→ ${winner.name} 罪恶较少（${winner.res.malice} vs ${loser.res.malice}），获胜`);
-  } else if (bidA > bidB) {
-    winner = challenger; loser = defender; winningBid = bidA;
-  } else {
-    winner = defender; loser = challenger; winningBid = bidB;
   }
 
-  // 赢家付掉自己的出价（钱给银行，不是给对手）
-  const paid = Math.min(winner.res.money, winningBid);
-  if (paid > 0) addRes(winner, 'money', -paid);
+  // 赢家手里有 `[i]` 卡（a070「敲诈！」/ a099「保险政策」）→ 先让他选
+  const handCardId = findConflictHandCard(winner);
+  if (handCardId) {
+    const card = CARD_BY_ID[handCardId]!;
+    const pending: PendingChoice = {
+      kind: CONFLICT_CARD_KIND,
+      playerId: winner.id,
+      prompt: `交锋获胜——可用手中的「${card.text.name}」（${card.handText}），或正常付款`,
+      options: [
+        { value: 'use', label: `打出「${card.text.name}」：${card.handText}` },
+        { value: 'decline', label: `不用，正常支付 ${Math.min(winner.res.money, winningBid)} 金钱` },
+      ],
+      min: 1,
+      max: 1,
+      resume: { actions: [], index: 0, targets: [winner.id], source: '交锋用牌', ownerId: winner.id },
+    };
+    state.pending = pending;
+    state.pendingInput = {
+      ...(state.pendingInput ?? {}),
+      [CONFLICT_CARD_KIND]: JSON.stringify({
+        winnerId: winner.id, loserId: loser.id, winningBid, cardId: handCardId,
+        challengerId: challenger.id,
+      }),
+    };
+    pushLog(state, winner.id, `${winner.name} 赢下交锋，可选择打出「${card.text.name}」`);
+    return pending;
+  }
+
+  applyConflictOutcome(state, winner, loser, winningBid, undefined, challenger.id);
+  return undefined;
+}
+
+/**
+ * 应用交锋结果（扣款、统计、钩子、逮捕）。
+ *
+ * @param usedCardId 赢家打出的 `[i]` 卡；`undefined` 表示正常付款
+ * @param challengerId 引发交锋的一方（用于 `conflictInit` 统计）
+ */
+function applyConflictOutcome(
+  state: EngineState,
+  winner: EnginePlayer,
+  loser: EnginePlayer,
+  winningBid: number,
+  usedCardId: string | undefined,
+  challengerId: string,
+): void {
+  let paid = 0;
+  let usedCardName = '';
+  /** a070 的位移：必须等逮捕之后再放（逮捕会把输家送进监狱格） */
+  const displaceAfterArrest = new Map<string, string>();
+
+  if (usedCardId) {
+    const card = CARD_BY_ID[usedCardId];
+    usedCardName = card?.text.name ?? usedCardId;
+    // 卡牌先离手（进弃牌堆）
+    const i = winner.hand.indexOf(usedCardId);
+    if (i >= 0) winner.hand.splice(i, 1);
+    state.discard.push(usedCardId);
+
+    if (usedCardId === CARD_BY_NAME['a099']?.id) {
+      // a099「保险政策」：**胜出时改为弃掉此卡，不付钱**
+      pushLog(state, winner.id, `打出「${usedCardName}」：赢下交锋但**不支付**出价（省下 ${Math.min(winner.res.money, winningBid)} 金钱）`);
+    } else if (usedCardId === CARD_BY_NAME['a070']?.id) {
+      // a070「敲诈！」：把对手挪到离自己一格的位置，且**对手付你 50$**。
+      // 注意：这张卡**不免付**——出价照付，它只是额外敲诈 + 位移。
+      const amount = CARD_BY_ID[usedCardId]?.params?.[0] ?? 50;
+      const o = winner.res.money;
+      const moved = transferRes(loser, winner, 'money', amount);
+      pushLog(state, winner.id,
+        `打出「${usedCardName}」：${loser.name} 付给你 ${moved.moved} 金钱（${o} → ${winner.res.money}）`);
+
+      // 出价照付
+      paid = Math.min(winner.res.money, winningBid);
+      if (paid > 0) addRes(winner, 'money', -paid);
+      pushLog(state, winner.id, `仍须支付出价 ${paid} 金钱`);
+
+      // ⚠️ 位移要**记下来、等逮捕之后再放**：`arrest()` 会把输家传送到监狱格，
+      // 若在这里直接改 cellId，随后就被监狱格覆盖掉了。
+      const here = getCell(state, winner.cellId);
+      const dest = (here?.out ?? []).find((id) => id !== loser.cellId && !!getCell(state, id));
+      if (dest) {
+        displaceAfterArrest.set(loser.id, dest);
+        pushLog(state, winner.id,
+          `${loser.name} 将被挪到相邻的 ${cellLabel(getCell(state, dest))}`);
+      }
+    } else {
+      // 其它 `[i]` 卡（未来新增）：保守起见仍照常付款
+      const p = Math.min(winner.res.money, winningBid);
+      if (p > 0) addRes(winner, 'money', -p);
+      paid = p;
+      pushLog(state, winner.id, `打出「${usedCardName}」但规则未实现，仍支付 ${p} 金钱`);
+    }
+  } else {
+    // 正常：赢家付掉自己的出价（钱给银行，不是给对手）
+    paid = Math.min(winner.res.money, winningBid);
+    if (paid > 0) addRes(winner, 'money', -paid);
+  }
 
   // 统计
-  for (const p of [challenger, defender]) p.conflictTotal += 1;
-  challenger.conflictInit += 1; // 由挑战者落地引发
+  for (const p of [loser, winner]) p.conflictTotal += 1;
+  // `conflictInit` 只给**引发交锋**的一方（落地撞上对手的那位）
+  const challenger = getPlayer(state, challengerId);
+  if (challenger) challenger.conflictInit += 1;
   winner.conflictWon += 1;
   winner.conflictPaid += paid;
 
   pushLog(state, winner.id,
-    `${winner.name} 以 ${paid} 金钱赢下交锋，留在原地；${loser.name} 被逮捕`);
+    `${winner.name} 赢下交锋，留在原地；${loser.name} 被逮捕`);
 
   // 永久卡钩子：参与的持卡者 +N；输家的持卡者效果
   fireTrigger(state, 'playerConflict', { actorId: winner.id });
@@ -1270,7 +1402,41 @@ function settleConflict(
 
   arrest(state, loser, `玩家交锋输给 ${winner.name}`);
 
-  void lastBidderId;
+  // a070 的位移在逮捕之后生效（否则会被 arrest() 的"送进监狱格"覆盖）
+  const dest = displaceAfterArrest.get(loser.id);
+  if (dest) {
+    loser.cellId = dest;
+    pushLog(state, winner.id, `${loser.name} 被挪到相邻的 ${cellLabel(getCell(state, dest))}`);
+  }
+
+}
+
+/**
+ * 处理「交锋胜出时打出手中的 `[i]` 卡」的选择。
+ */
+export function resolveConflictCard(
+  state: EngineState,
+  playerId: string,
+  answer: string,
+): { ok: boolean; reason?: string; pending?: PendingChoice } {
+  const raw = state.pendingInput?.[CONFLICT_CARD_KIND];
+  delete state.pendingInput?.[CONFLICT_CARD_KIND];
+  state.pending = undefined;
+  if (!raw) return { ok: false, reason: '没有待处理的交锋用牌' };
+
+  const info = JSON.parse(raw) as {
+    winnerId: string; loserId: string; winningBid: number; cardId: string; challengerId: string;
+  };
+  if (info.winnerId !== playerId) return { ok: false, reason: '不是你的决策' };
+
+  const winner = getPlayer(state, info.winnerId);
+  const loser = getPlayer(state, info.loserId);
+  if (!winner || !loser) return { ok: false, reason: '交锋双方不存在' };
+
+  const use = answer === 'use';
+  applyConflictOutcome(state, winner, loser, info.winningBid,
+    use ? info.cardId : undefined, info.challengerId ?? info.winnerId);
+  return { ok: true };
 }
 
 function drawMisfortuneFor(state: EngineState, p: EnginePlayer): void {

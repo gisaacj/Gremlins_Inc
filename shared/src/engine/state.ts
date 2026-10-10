@@ -207,11 +207,22 @@ export function canAffordCard(p: EnginePlayer, cardId: string): { ok: boolean; r
 }
 
 /** 能否用这张牌移动：只要求持有且付得起费用 */
+/**
+ * 能否用这张牌**移动**。
+ *
+ * 用行动卡移动**不花任何资源**——卡牌的费用只在"在站点把它当效果打出"时支付。
+ * 一张牌既可用来移动，也可在它的特定站点打出效果；
+ * 同样是打出一张牌，走路免费，站点施放才付费。
+ *
+ * 所以这里**不能**检查 `canAffordCard`：付不起钱的牌照样能用来走路。
+ * （曾经误加了可支付性检查 + 移动时扣费，导致 AI 与玩家在缺钱时寸步难行。）
+ */
 export function canMoveWithCard(p: EnginePlayer, cardId: string): { ok: boolean; reason?: string } {
   const card = CARD_BY_ID[cardId];
   if (!card) return { ok: false, reason: '卡牌不存在' };
   if (card.move <= 0) return { ok: false, reason: '这张牌没有移动点数' };
-  return canAffordCard(p, cardId);
+  if (!p.hand.includes(cardId)) return { ok: false, reason: '不在手牌中' };
+  return { ok: true };
 }
 
 /**
@@ -265,7 +276,7 @@ export function startMove(
     if (state.pending) return { ok: false, reason: '有未完成的决策' };
     const chk = canMoveWithCard(p, cardId);
     if (!chk.ok) return chk;
-    payCardCost(p, card);
+    // 移动**不付费**——卡牌费用只在站点打出效果时支付（见 canMoveWithCard 的注释）
     removeFromHand(state, p, cardId);
     p.lastMoveCardId = cardId;
     p.lastMoveSteps = card.move;

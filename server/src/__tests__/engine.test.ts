@@ -9,7 +9,7 @@ import {
   CARD_BY_ID, CHARACTER_BY_ID, CHARACTERS, NORMAL_MAP, cellLabel, mustCurrentPlayer, getCell, getMap,
 } from '@gremlins/shared/engine';
 import {
-  HAND_SIZE, bribeAmount, canPlayCard, createState, startMove,
+  HAND_SIZE, bribeAmount, canMoveWithCard, canPlayCard, createState, startMove,
   endTurn, playEffectCard, resolvePending,
 } from '@gremlins/shared/engine';
 import { parseParam, parseParams, firstNumber, firstResource, hasTag, payAmount } from '@gremlins/shared/engine';
@@ -190,17 +190,58 @@ check('移动结束后 moveCursor 被清理', () => {
   assert.equal(s.moveCursor, undefined, 'moveCursor 应被清理');
   assert.equal(s.pending, undefined, '不应残留挂起');
 });
-check('移动牌会扣除费用', () => {
+/**
+ * 「用卡移动不花资源」的权威依据（游戏内文案）：
+ *
+ *  - `15774184674423479516`「当你**使用**无特殊规则的卡牌时，你将按价格支付金币
+ *    （除非卡牌免费）并获得卡牌底部显示的资源。」——付费对应的是**资源收益**，
+ *    而资源只在"在站点把卡当效果打出"时结算。
+ *  - `a053「有趣的发现」` 是 `move=3 price=0`；教学里说"用它移动得花 $20"
+ *    （`18132655247867922307`）其实是**永久卡 a138「机器交警」**的效果：
+ *    「任意玩家使用移动点数为 5 或 6 的卡牌移动时：该玩家给予你 {1}$」
+ *    （动作 `Perm_SpeedPay["20"]`）。不是卡价。
+ */
+check('用行动卡移动**不花资源**（费用只在站点打出效果时支付）', () => {
+  const s = newGame();
+  const p = mustCurrentPlayer(s);
+  p.res.money = 10000;
+  // 特意挑一张"付费"的移动牌：走路照样免费
+  const card = p.hand
+    .map((id) => CARD_BY_ID[id]!)
+    .find((c) => c.move > 0 && c.price > 0 && c.priceType === 'Money');
+  assert.ok(card, '手牌里没有付费移动牌');
+  const before = p.res.money;
+  autoMove(s, p.id, card.id);
+  assert.equal(p.res.money, before,
+    `移动不该扣费：${before} → ${p.res.money}（${card.name} price=${card.price}）`);
+});
+check('付不起钱的牌也能用来移动', () => {
+  const s = newGame();
+  const p = mustCurrentPlayer(s);
+  p.res.money = 0;
+  p.res.vote = 0;
+  const card = p.hand
+    .map((id) => CARD_BY_ID[id]!)
+    .find((c) => c.move > 0 && c.price > 0);
+  assert.ok(card, '手牌里没有付费移动牌');
+  const chk = canMoveWithCard(p, card.id);
+  assert.ok(chk.ok, `付不起也该能走路：${chk.reason}（${card.name} price=${card.price}）`);
+});
+check('在站点打出效果牌**才**扣费用', () => {
   const s = newGame();
   const p = mustCurrentPlayer(s);
   p.res.money = 10000;
   const card = p.hand
     .map((id) => CARD_BY_ID[id]!)
     .find((c) => c.move > 0 && c.price > 0 && c.priceType === 'Money' && canPlayCard(s, p, c.id).ok);
-  assert.ok(card, '没有当前可打出的付费移动牌');
+  if (!card) {
+    console.log('      （本局手牌没有"在当前站点可打出且付费"的牌，跳过）');
+    return;
+  }
   const before = p.res.money;
-  autoMove(s, p.id, card.id);
-  assert.equal(p.res.money, before - card.price);
+  playEffectCard(s, p.id, card.id);
+  assert.equal(p.res.money, before - card.price,
+    `站点施放应扣费：${before} → ${p.res.money}（${card.name}）`);
 });
 
 console.log('\n=== 4. 卡牌地点限制 ===');

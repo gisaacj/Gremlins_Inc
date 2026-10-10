@@ -452,6 +452,28 @@ function abilityOptions(state: EngineState, p: EnginePlayer, cellType: string): 
 }
 
 /** 列出该玩家此刻可执行的全部可选动作 */
+/**
+ * 站点/建筑的可选动作是"**每次到访做一次**"。
+ *
+ * 原版文案：`If you want: roll the dice to dig through the junk.`
+ * ——"想要的话掷骰翻垃圾"，一次到访一次机会（`15747048738541475235`：
+ * "{N} chooses not to dig through the junk."，是一个一次性选择）。
+ *
+ * 之前没有这个限制，AI 能在同一回合反复调用 `junkyard.dig`：
+ * 掷 4/5/6 分别 +10/+20/+30 金钱，几百次滚出 $20000+。
+ * 这是"每回合无限刷钱"级别的漏洞，不只是 AI 贪心。
+ *
+ * 用 `p.flags` 记录（回合末会被 `endTurn` 清空，正好是"每回合"的语义）。
+ */
+function optionUsedKey(optionId: string): string {
+  return `optUsed:${optionId}`;
+}
+
+/** 该可选动作本回合是否已用过 */
+export function optionUsedThisTurn(p: EnginePlayer, optionId: string): boolean {
+  return p.flags[optionUsedKey(optionId)] === 1;
+}
+
 export function availableOptions(state: EngineState, playerId: string): OptionSpec[] {
   const p = getPlayer(state, playerId);
   if (!p) return [];
@@ -460,7 +482,8 @@ export function availableOptions(state: EngineState, playerId: string): OptionSp
   // 只有轮到自己、且已完成走牌才有可选动作
   const cur = modelCurrentPlayer(state);
   if (!cur || cur.id !== playerId) return [];
-  return cellOptions(state, p);
+  // 本回合已用过的动作不再列出
+  return cellOptions(state, p).filter((o) => !optionUsedThisTurn(p, o.id));
 }
 
 // ---------------------------------------------------------------- 执行
@@ -502,6 +525,20 @@ export function doOption(
     if (state.log.length > 400) state.log.shift();
   };
 
+  // 成功执行即标记"本回合已用过"（回合末由 endTurn 清空 flags）。
+  // 没有这道标记时 AI 能在同一回合反复翻垃圾刷钱（掷 4/5/6 给 +10/+20/+30 金钱，
+  // 几百次能滚出两万以上）。
+  const doneUsed = (message: string): OptionResult => {
+    p.flags[optionUsedKey(optionId)] = 1;
+    return done(message);
+  };
+
+  // 每次到访只能做一次——重复调用直接拒绝（不能只靠 availableOptions 过滤，
+  // 调用方可能自己拼 optionId）
+  if (optionUsedThisTurn(p, optionId)) {
+    return fail('本回合已经做过这个动作了');
+  }
+
   switch (parts[0]) {
     // ---- 站点动作 ----
     case 'bank': {
@@ -511,7 +548,7 @@ export function doOption(
       addRes(p, 'money', -cost);
       addRes(p, 'income', gain);
       logIt(`投资 ${cost} 金，收入 +${gain}`);
-      return done(`投资 ${cost} 金，收入 +${gain}`);
+      return doneUsed(`投资 ${cost} 金，收入 +${gain}`);
     }
 
     case 'office': {
@@ -532,7 +569,7 @@ export function doOption(
           });
         }
       }
-      return done(`卖 1 选票，得 ${gain} 金`);
+      return doneUsed(`卖 1 选票，得 ${gain} 金`);
     }
 
     case 'market': {
@@ -546,7 +583,7 @@ export function doOption(
       }
       addRes(p, 'money', gain + bonus);
       logIt(`在市场卖 1 齿轮，得 ${gain + bonus} 金${bonus ? `（含能力加成 ${bonus}）` : ''}`);
-      return done(`卖 1 齿轮，得 ${gain + bonus} 金`);
+      return doneUsed(`卖 1 齿轮，得 ${gain + bonus} 金`);
     }
 
     case 'court': {
@@ -565,7 +602,7 @@ export function doOption(
       addRes(p, 'money', -cost);
       const r = transferRes(target, p, 'vote', votes);
       logIt(`花 ${cost} 金从 ${target.name} 没收 ${r.moved} 选票`);
-      return done(`没收 ${r.moved} 选票`);
+      return doneUsed(`没收 ${r.moved} 选票`);
     }
 
     case 'plant': {
@@ -575,7 +612,7 @@ export function doOption(
       addRes(p, 'malice', -malice);
       p.skipTurns += 1;
       logIt(`在工厂打工：+${money} 金，-${malice} 罪恶，跳过 1 回合`);
-      return done(`打工：+${money} 金，-${malice} 罪恶，下回合跳过`);
+      return doneUsed(`打工：+${money} 金，-${malice} 罪恶，下回合跳过`);
     }
 
     case 'astral': {
@@ -597,7 +634,7 @@ export function doOption(
         }
       }
       logIt(`在天界休息：-${malice} 罪恶，抽 ${draw} 张留 1 张，跳过 1 回合`);
-      return done(`休息：-${malice} 罪恶，跳过下回合`);
+      return doneUsed(`休息：-${malice} 罪恶，跳过下回合`);
     }
 
     case 'junkyard': {
@@ -614,7 +651,7 @@ export function doOption(
         }
       }
       logIt(`翻垃圾掷出 ${r.dice}：${r.message}${poorest ? `，最穷额外 +${bonus}` : ''}`);
-      return done(`掷出 ${r.dice}：${r.message}${poorest ? `，最穷额外 +${bonus}` : ''}`);
+      return doneUsed(`掷出 ${r.dice}：${r.message}${poorest ? `，最穷额外 +${bonus}` : ''}`);
     }
 
     case 'treasure': {
@@ -622,7 +659,7 @@ export function doOption(
       const table = diceTableOf('Treasure');
       const r = rollOnTable(state, p, table);
       logIt(`藏宝阁掷出 ${r.dice}：${r.message}`);
-      return done(`掷出 ${r.dice}：${r.message}`);
+      return doneUsed(`掷出 ${r.dice}：${r.message}`);
     }
 
     case 'tribune': {
@@ -655,7 +692,7 @@ export function doOption(
       const votes = (tier[need]?.gain?.vote ?? 0) + (win ? bonus : 0);
       if (win && votes) addRes(p, 'vote', votes);
       logIt(`演讲下注 ${amt} 掷出 ${dice}（需 ≥${need}）：${win ? `+${votes} 选票` : '失败'}`);
-      return done(win
+      return doneUsed(win
         ? `掷出 ${dice}（需 ≥${need}），演讲成功 +${votes} 选票`
         : `掷出 ${dice}（需 ≥${need}），演讲失败，损失 ${amt} 金`);
     }
@@ -669,7 +706,7 @@ export function doOption(
       addRes(p, 'money', -cost);
       p.flags['insured'] = 1;
       logIt(`购买保险 ${cost} 金`);
-      return done(`已购买保险（${cost} 金）`);
+      return doneUsed(`已购买保险（${cost} 金）`);
     }
 
     case 'risk': {
@@ -681,7 +718,7 @@ export function doOption(
         handleSpecialOutcome(state, p, r.outcome.special);
       }
       logIt(`试手气掷出 ${r.dice}：${r.message}`);
-      return done(`掷出 ${r.dice}：${r.message}`);
+      return doneUsed(`掷出 ${r.dice}：${r.message}`);
     }
 
     case 'casino': {
@@ -707,7 +744,7 @@ export function doOption(
         }
       }
       logIt(`赌场掷出 ${r.dice}：${r.message}`);
-      return done(`掷出 ${r.dice}：${r.message}`);
+      return doneUsed(`掷出 ${r.dice}：${r.message}`);
     }
 
     // ---- 角色能力带来的可选动作 ----
@@ -719,7 +756,7 @@ export function doOption(
           if (!astral) return fail('棋盘上没有天界');
           p.cellId = astral.id;
           logIt('角色能力·天界俱乐部：从银行直达天界');
-          return done('已传送到天界');
+          return doneUsed('已传送到天界');
         }
         case 'playAgain': {
           // 可再打一张效果牌：把"本回合已走牌"复位，让 playCard 重新可用。
@@ -732,13 +769,13 @@ export function doOption(
           p.flags['optionsOffered'] = 1;
           p.movedThisTurn = true;
           logIt('角色能力·商业头脑：可再打一张效果牌');
-          return done('可再打一张效果牌');
+          return doneUsed('可再打一张效果牌');
         }
         case 'discardOne': {
           if (!p.hand.length) return fail('没有手牌');
           const dropped = discardFromHand(state, p, 1);
           logIt(`角色能力·风险经营：弃 ${dropped.length} 张手牌`);
-          return done(`弃 ${dropped.length} 张手牌`);
+          return doneUsed(`弃 ${dropped.length} 张手牌`);
         }
         case 'sellIncome': {
           const inc = Number(parts[2] ?? 10);
@@ -747,13 +784,13 @@ export function doOption(
           addRes(p, 'income', -inc);
           addRes(p, 'money', gain);
           logIt(`角色能力·对冲风险：卖 ${inc} 收入得 ${gain} 金`);
-          return done(`卖 ${inc} 收入，得 ${gain} 金`);
+          return doneUsed(`卖 ${inc} 收入，得 ${gain} 金`);
         }
         case 'doubleIncome': {
           const gain = p.res.income;
           addRes(p, 'money', gain);
           logIt(`角色能力·挖宝：双倍收入 +${gain} 金`);
-          return done(`双倍收入，+${gain} 金`);
+          return doneUsed(`双倍收入，+${gain} 金`);
         }
         case 'drawAndKeep': {
           const n = Number(parts[2] ?? 6);
@@ -770,7 +807,7 @@ export function doOption(
             }
           }
           logIt(`角色能力·挖宝：抽 ${drawn.length} 张留 1 张`);
-          return done(`抽 ${drawn.length} 张，留 1 张`);
+          return doneUsed(`抽 ${drawn.length} 张，留 1 张`);
         }
         default:
           return fail(`未知能力动作 ${which}`);

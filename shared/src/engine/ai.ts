@@ -11,7 +11,7 @@
 //   4) 能移动 → 移动（优先走向建筑）
 //   5) 都不行 → 结束回合
 // =============================================================
-import type { ChaosCard, EnginePlayer, EngineState } from './model.js';
+import type { ActionCard, ChaosCard, EnginePlayer, EngineState } from './model.js';
 import { CARD_BY_ID, CELL_TYPE_BY_ID, CHAOS_CARDS, cellTypeOf, getCell, getPlayer } from './model.js';
 import {
   answerChoice, chaosOptions, currentPlayerId, isTurn, jailTurn, listOptions, movableCards,
@@ -125,10 +125,19 @@ export class AIPlayer {
         }
       }
 
-      // 移动：步数最大的优先
-      const movable = movableCards(state, playerId).sort(
-        (a, b) => (CARD_BY_ID[b]?.move ?? 0) - (CARD_BY_ID[a]?.move ?? 0),
-      );
+      // 移动：**优先免费卡**，其次步数最大。
+      //
+      // 184 张移动卡里 90 张是免费的（49%），而且免费卡本身往往还给钱给齿轮
+      // （如 a006「外快」3 步、a007「大善人」5 步）。用钱移动只有在
+      // "没有免费选项"或"免费的步数明显不够"时才值得——否则等于白送资源。
+      const movable = movableCards(state, playerId).sort((a, b) => {
+        const ca = CARD_BY_ID[a];
+        const cb = CARD_BY_ID[b];
+        const freeA = cardCost(ca) === 0 ? 1 : 0;
+        const freeB = cardCost(cb) === 0 ? 1 : 0;
+        if (freeA !== freeB) return freeB - freeA;          // 免费在前
+        return (cb?.move ?? 0) - (ca?.move ?? 0);           // 同为免费/收费时比步数
+      });
       if (movable.length) {
         const cardId = movable[0];
         const dest = this.pickDestination(state, playerId, cardId);
@@ -345,6 +354,16 @@ export function cardScore(id: string): number {
   const gain = (inc?.score ?? 0) * 10 + (inc?.vote ?? 0) * 3 + (inc?.money ?? 0) / 50;
   const loss = (out?.score ?? 0) * 10 + (out?.money ?? 0) / 50 + (out?.malice ?? 0);
   return gain - loss;
+}
+
+/**
+ * 卡的**现金代价**（选票计价按 0 计——选票不是"用钱移动"）。
+ *
+ * 用来给移动卡排序：免费的优先，避免 AI 把钱白花在移动上。
+ */
+function cardCost(card: ActionCard | undefined): number {
+  if (!card || !card.price) return 0;
+  return card.priceType === 'Money' ? card.price : 0;
 }
 
 /**

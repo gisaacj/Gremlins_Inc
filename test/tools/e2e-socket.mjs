@@ -246,7 +246,12 @@ try {
     const pick = acts.find((a) => a.affordable !== false && !a.needsTarget);
     if (pick) {
       const before = got.gameState.players.find((p) => p.id === socket.id);
+      const logLenBefore = got.gameState.log.length;
+      const optionCountBefore = acts.length;
       send('game:do_option', { optionId: pick.id });
+      // 可选动作的结果可能是"什么都拿不到"（赌博掷骰有"谢谢参与"），
+      // 所以判定"生效"要看**任意可观察变化**：资源、位置、日志、或该动作
+      // 从列表里消失（每回合限一次）。只比资源会让这条断言随机失败。
       const changed = await waitFor('执行可选动作后的状态变化', () => {
         const me2 = got.gameState.players.find((p) => p.id === socket.id);
         const r = me2.resources;
@@ -254,11 +259,14 @@ try {
           || r.votes !== before.resources.votes
           || r.cogs !== before.resources.cogs
           || r.income !== before.resources.income
-          || me2.position !== before.position;
+          || me2.position !== before.position
+          || got.gameState.log.length !== logLenBefore
+          || !got.prompt?.optionalActions?.some((a) => a.id === pick.id)
+          || (got.prompt?.optionalActions?.length ?? optionCountBefore) !== optionCountBefore;
       }, 8000);
       check(`执行可选动作「${pick.label}」生效`, () => {
         if (got.errors.length) throw new Error(JSON.stringify(got.errors));
-        if (!changed) throw new Error('资源与位置都没变');
+        if (!changed) throw new Error('资源、位置、日志、动作列表都没有变化');
         const me2 = got.gameState.players.find((p) => p.id === socket.id);
         console.log(`      金钱 ${before.resources.gold} → ${me2.resources.gold}，`
           + `选票 ${before.resources.votes} → ${me2.resources.votes}，`

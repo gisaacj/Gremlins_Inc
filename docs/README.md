@@ -142,6 +142,43 @@ a076/a123 移动后跳过 1 回合、a031 逆行、a140 移动 −50$ 且 −1^�
 
 新增测试 `conflict-hand-cards.test.ts`（17 项）。
 
+### 本轮实现：厄运牌堆的两条规则（含"按人数改卡池"）
+
+原版 `GGame.nonlockedMFPickCard()` 里构造牌堆的代码（同一段连着写了两遍，
+因为"抽完立即重洗"也走这里）暴露了两件事：
+
+```csharp
+foreach (card in DM.MisFortuneCards)
+    for (int j = 0; j < card.DeckCount; j++) list.Add(card.ID);   // 按 DeckCount 展开
+UIN[] array = list.OrderBy(x => GGame.GetNextInt32(rnd)).ToArray();  // 洗牌
+for (int k = 0; k < array.Length; k++)
+    if (this.Players.Count < 5 || !(array[k] == "F7C040EC0741FE1C"))
+        this.MFCDeck.AddFirst(array[k]);                         // ★ 人数规则
+```
+
+| 规则 | 说明 |
+|---|---|
+| **按 `DeckCount` 展开** | 引擎原先直接 `MISFORTUNE_CARDS.map(c => c.id)`，忽略了 `DeckCount`（当前 40 张恰好都是 1，所以没暴露，但语义是错的） |
+| **玩家 ≥5 人剔除 m029** | `F7C040EC0741FE1C` = **m029「丢失的债券」**。5 人及以上时这张牌不进牌堆（40 → 39 张）。这是原版少见的"按人数改卡池"规则 |
+
+实现：新增 `buildMisfortuneDeck(state)` 统一构造（`interp.ts`），
+`createState` 与 `drawMisfortune` 的"抽完重洗"都走它。
+
+⚠️ **构造时机有坑**：人数规则依赖 `state.players.length`，
+而 `createState` 里原先在玩家填好**之前**就构造牌堆 → 规则永远不生效。
+已改到玩家排序之后构造（测试专门覆盖了 2/3/4/5/6 人五种情况）。
+
+新增测试 `misfortune-deck.test.ts`（16 项）。
+
+### 顺带修掉一个"看运气"的测试
+
+`jail-rank.test.ts` 的「服刑 5 回合后应升到 rank 1」在洗牌顺序变化后失败——
+原因是它从牌堆随机抽牌，而监狱牌里有 **t051「特赦」**（直接释放），
+抽到就提前出狱，5 回合根本走不满。
+
+这是**测试脆弱**而不是引擎问题：改为把牌堆固定成"不含释放牌"的集合，
+把变量控制在"经验累积"这一件事上。
+
 ---
 
 ## 一、重要前提：反编译范围的边界 ⚠️

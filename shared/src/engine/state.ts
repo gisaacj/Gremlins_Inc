@@ -15,8 +15,8 @@ import {
   getCell, getMap, getPlayer,
 } from './model.js';
 import {
-  ELECTION_INTERVAL, arrest, discardFromHand, drawMisfortune, drawTo, random, release,
-  rollDice, runActions, runElection, type ActionContext,
+  ELECTION_INTERVAL, arrest, buildMisfortuneDeck, discardFromHand, drawMisfortune, drawTo,
+  random, release, rollDice, runActions, runElection, type ActionContext,
 } from './interp.js';
 import { addRes, transferRes } from './resources.js';
 import {
@@ -147,7 +147,9 @@ export function createState(args: EngineInitArgs): EngineState {
     players: [],
     deck: [],
     discard: [],
-    misfortuneDeck: MISFORTUNE_CARDS.map((c) => c.id),
+    // 厄运牌堆由 `buildMisfortuneDeck` 统一构造（按 DeckCount 展开，
+    // 并处理"玩家 ≥5 人剔除 m029"这条人数规则）——见下方洗牌之后
+    misfortuneDeck: [],
     jailDeck: JAIL_CARDS.map((c) => c.id),
     // 混沌卡是**共享池**：全员都能看到并选择打哪张，打一张少一张
     chaosPool: args.chaosEnabled !== false ? CHAOS_CARDS.map((c) => c.id) : [],
@@ -165,8 +167,9 @@ export function createState(args: EngineInitArgs): EngineState {
 
   // 洗牌
   shuffleInPlace(state, deck);
-  shuffleInPlace(state, state.misfortuneDeck);
   shuffleInPlace(state, state.jailDeck);
+  // 注意：厄运牌堆**不能在这里**构造——它有一条"玩家 ≥5 人剔除 m029"的
+  // 人数规则，而 `state.players` 此时还是空的。等玩家填好后再建（见函数末尾）。
 
   // 角色分配追踪：已分配的角色不重复
   const assignedChars = new Set<string>();
@@ -196,6 +199,9 @@ export function createState(args: EngineInitArgs): EngineState {
     return (ca?.order ?? 99) - (cb?.order ?? 99);
   });
   state.deck = deck;
+
+  // 厄运牌堆：现在 players 已填好，可以应用"玩家 ≥5 人剔除 m029"的人数规则
+  state.misfortuneDeck = buildMisfortuneDeck(state);
 
   // 发初始手牌
   for (const p of state.players) drawTo(state, p, HAND_SIZE);

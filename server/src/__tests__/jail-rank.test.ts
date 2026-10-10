@@ -177,11 +177,19 @@ check('服刑 5 回合后应升到 rank 1', () => {
   const p = getPlayer(st, 'p0')!;
   p.inJail = true;
   p.term = 999;                   // 保证 5 回合内不出狱
+  // ⚠️ 必须**固定牌堆**：监狱牌里有「特赦」等直接释放的牌，
+  // 抽到就会提前出狱，导致这个用例变成看运气（之前正因洗牌顺序变化而失败）。
+  // 这里只留"不会释放"的牌，把变量控制在"经验累积"这一件事上。
+  const RELEASE_ACTIONS = new Set(['Freedom', 'PayTerm']);
+  const safeIds = JAIL_CARDS
+    .filter((c) => !c.actions.some((a) => RELEASE_ACTIONS.has(String(a.type))))
+    .map((c) => c.id);
+
   for (let i = 0; i < 5; i++) {
     st.currentIndex = st.players.indexOf(p);
     if (!p.inJail) break;
+    st.jailDeck = [...safeIds];   // 重置成"安全牌堆"，避免抽到释放牌
     const r = takeJailTurn(st, 'p0');
-    // 挂起时选第一张非"拒绝"的候选
     if (r.pending?.kind === JAIL_PICK_KIND) {
       const pick = r.pending.options.find((o) => o.value !== 'jailDecline')!;
       resolveJailPick(st, 'p0', pick.value);
@@ -195,8 +203,9 @@ check('服刑 5 回合后应升到 rank 1', () => {
       st.pending = rr.pending;
     }
   }
+  assert.equal(p.inJail, true, '不该在这个用例里出狱');
   assert.equal(p.jailRank, 1, `实际 rank=${p.jailRank}，经验=${p.jailExp}`);
-  console.log(`      5 回合后 rank=${p.jailRank}（${JAIL_RANK_NAMES[p.jailRank]}）`);
+  console.log(`      5 回合后 rank=${p.jailRank}（${JAIL_RANK_NAMES[p.jailRank]}），经验 ${p.jailExp}`);
 });
 
 console.log('\n=== 4b. 候选抽取受 Rank/Karma 约束 ===');

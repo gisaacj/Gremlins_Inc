@@ -267,13 +267,57 @@ export function release(state: EngineState, p: EnginePlayer): void {
   log(state, p.id, `${nameOf(p)} 获释`);
 }
 
+/**
+ * 构造一副新的厄运牌堆（按 `DeckCount` 展开，已洗牌）。
+ *
+ * 对应原版 `GGame.nonlockedMFPickCard()` 里构造牌堆的那段：
+ * 先按每张卡的 `DeckCount` 重复放入，再随机排序。
+ *
+ * ⚠️ 原版有一条**人数相关的硬编码剔除**（同一段逻辑连着写了两遍，
+ * 因为"抽完立即重洗"也走这里）：
+ * ```csharp
+ * if (this.Players.Count < 5 || !(array[k] == "F7C040EC0741FE1C"))
+ *     this.MFCDeck.AddFirst(array[k]);
+ * ```
+ * `F7C040EC0741FE1C` = **m029「丢失的债券」**。
+ * 即**玩家 ≥ 5 人时这张牌不进牌堆**。这是原版里少见的"按人数改卡池"规则。
+ */
+export const MF_EXCLUDED_AT_FIVE_PLAYERS = 'F7C040EC0741FE1C';
+
+export function buildMisfortuneDeck(state: EngineState): string[] {
+  const deck: string[] = [];
+  for (const c of MISFORTUNE_CARDS) {
+    const n = Math.max(1, c.deckCount ?? 1);
+    for (let i = 0; i < n; i++) deck.push(c.id);
+  }
+  shuffleInPlace(state, deck);
+  // 玩家 ≥5 人时剔除指定牌（原版比较的是十六进制 UIN 字符串）
+  if (state.players.length >= 5) {
+    const dec = BigInt(`0x${MF_EXCLUDED_AT_FIVE_PLAYERS}`).toString();
+    for (let i = deck.length - 1; i >= 0; i--) {
+      if (deck[i] === dec) deck.splice(i, 1);
+    }
+  }
+  return deck;
+}
+
+/** 原地洗牌，用引擎的确定性 RNG */
+function shuffleInPlace(state: EngineState, arr: string[]): void {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(random(state) * (i + 1));
+    const t = arr[i];
+    arr[i] = arr[j];
+    arr[j] = t;
+  }
+}
+
 export function drawMisfortune(state: EngineState, p: EnginePlayer): void {
   // 获得厄运前钩子：永久卡可能以弃置自身代替（如「幸运药水」）
   const preFlags: Record<string, string | number | boolean> = {};
   firePermTrigger(state, 'mustGetMisfortune', { actorId: p.id, flags: preFlags });
   if (preFlags.misfortuneSkipped) return;
 
-  if (state.misfortuneDeck.length === 0) state.misfortuneDeck = MISFORTUNE_CARDS.map((c) => c.id);
+  if (state.misfortuneDeck.length === 0) state.misfortuneDeck = buildMisfortuneDeck(state);
   const id = state.misfortuneDeck.pop();
   if (!id) return;
   const card = MISFORTUNE_CARDS.find((c) => c.id === id);

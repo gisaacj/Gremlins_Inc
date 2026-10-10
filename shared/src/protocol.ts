@@ -253,6 +253,15 @@ export interface PlayerPrompt {
    * 不是从固定档位里挑。早先界面只给了预设档位（10/20/30…），
    * 玩家没法出任意价钱（用户报的 bug #4）。
    */
+  /**
+   * 是否给出「结束本阶段 / 结束回合」按钮。
+   *
+   * 用户要求（bug #9）：**无可操作步骤时自动跳过**，只有"可选"的步骤
+   * 才需要玩家自己点结束。所以：
+   *  - UseCard 阶段无牌可打 → 引擎直接进 UseCell，不返回该阶段提示
+   *  - UseCell（站点/建筑动作）属于可选 → canEndPhase: true，给按钮
+   */
+  canEndPhase?: boolean;
   numeric?: {
     /** 允许范围（闭区间） */
     min: number;

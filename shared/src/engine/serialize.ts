@@ -190,12 +190,20 @@ export function buildEnginePrompt(
     // 之前用 === 0 导致移动后永远进不了 UseCard 阶段，无法在站点打出效果牌。
     if (current.cardsPlayedThisTurn <= 1 || canPlayAgain) {
       const playable = playableCards(state, viewerId);
-      return {
-        type: 'play_card_or_skip',
-        message: `到达「${place}」：可打出一张卡牌，或跳过`,
-        options: playable,
-        optionalActions: [],
-      };
+      // ── 无牌可打 → **自动跳过本阶段** ──
+      //
+      // 用户要求（bug #9）："使用卡牌阶段如果没有卡牌可以用就直接跳过到下一阶段"。
+      // 只自动跳过 **UseCard**；下面的 UseCell（站点/建筑动作）属于"可选"，
+      // 必须留给玩家自己决定，所以那一段照旧给按钮。
+      if (playable.length > 0) {
+        return {
+          type: 'play_card_or_skip',
+          message: `到达「${place}」：可打出一张卡牌，或跳过`,
+          options: playable,
+          optionalActions: [],
+          canEndPhase: true,
+        };
+      }
     }
 
     // === UseCell 阶段：可用建筑动作或跳过（无卡牌）===
@@ -213,6 +221,7 @@ export function buildEnginePrompt(
         reason: o.reason,
         needsTarget: o.needsTarget,
       })),
+      canEndPhase: true,
     };
   }
 

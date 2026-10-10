@@ -293,8 +293,10 @@ export function GamePage() {
                 <button className="primary" onClick={jailTurn}>服刑（抽监狱卡）</button>
               )}
 
-              {/* 移动后：跳过打牌 = 自动换人 */}
-              {prompt.type === 'play_card_or_skip' && (
+              {/* 结束本阶段 / 结束回合。
+                  用户要求（bug #9）：无可操作步骤时**自动跳过**，只有"可选"的
+                  步骤才需要这个按钮 —— 服务端用 canEndPhase 标明。 */}
+              {prompt.type === 'play_card_or_skip' && prompt.canEndPhase && (
                 <button onClick={skipPlay}>跳过，结束回合</button>
               )}
             </div>

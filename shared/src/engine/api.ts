@@ -303,10 +303,21 @@ function autoPickBranch(
 
 // ---------------------------------------------------------------- 打牌
 /** 在当前地点打出卡牌效果 */
+/**
+ * 打出一张效果牌。
+ *
+ * @param targetPlayerId 玩家在界面上**已经选好**的目标玩家。
+ *
+ * ⚠️ 这个参数是修 bug #5 加的：界面上打出"选择任意玩家"的卡时，
+ * 玩家已经在卡牌详情里点过一次目标，但服务端把目标丢了，
+ * 于是引擎又挂起一次 `SelectOpponent` —— 玩家被迫**选两次同一个人**。
+ * 现在把已选目标直接喂给引擎的第一步选择，不再重复询问。
+ */
 export function playCard(
   state: EngineState,
   playerId: string,
   cardId: string,
+  targetPlayerId?: string,
 ): ActionResult {
   const p = getPlayer(state, playerId);
   if (!p) return fail('玩家不存在');
@@ -316,6 +327,18 @@ export function playCard(
   if (!chk.ok) return fail(chk.reason ?? '不能打出');
   const r = playEffectCard(state, playerId, cardId);
   if (!r.ok) return fail(r.reason ?? '打出失败');
+
+  // 玩家已选好目标 → 直接回答第一次选择，不再问第二遍
+  if (r.pending && targetPlayerId) {
+    const rr = resolvePending(state, playerId, [targetPlayerId]);
+    if (!rr.ok) {
+      // 目标不合法（例如该卡其实不需要选人）→ 回退成正常挂起
+      return ok(r.pending);
+    }
+    if (rr.pending) return ok(rr.pending);
+    return maybeAutoEnd(state);
+  }
+
   if (r.pending) return ok(r.pending);
   return maybeAutoEnd(state);
 }

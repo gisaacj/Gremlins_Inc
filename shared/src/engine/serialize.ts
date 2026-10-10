@@ -10,8 +10,10 @@ import type {
 } from '../protocol.js';
 import type { EngineState, EnginePlayer } from './model.js';
 import { CHAOS_CARDS, cellLabel, getCell, getMap } from './model.js';
+import { getPlayer } from './model.js';
 import { availableOptions } from './options.js';
 import { chaosOptions, playableCards } from './api.js';
+import { conflictBidMax } from './state.js';
 
 /** 引擎回合阶段 → 协议字符串（客户端主要用 prompt，这里只作展示与调试） */
 function phaseOf(state: EngineState): string {
@@ -134,6 +136,18 @@ export function buildEnginePrompt(
     const pend = state.pending;
     if (pend.playerId !== viewerId) {
       return { type: 'wait_others', message: `等待 ${nameOf(state, pend.playerId)} 选择` };
+    }
+    // 交锋出价：原版是**自定义金额**（上限 = 出价者自己的金钱），
+    // 不能只给固定档位 —— 用户 bug #4。
+    if (pend.kind.startsWith('conflict:') && pend.min === 1 && pend.max === 1) {
+      const bidder = getPlayer(state, viewerId);
+      const cap = bidder ? conflictBidMax(bidder) : 0;
+      return {
+        type: 'choose',
+        message: pend.prompt,
+        choices: pend.options,
+        numeric: { min: 0, max: cap, step: 1, unit: '金钱' },
+      };
     }
     return {
       type: 'choose',

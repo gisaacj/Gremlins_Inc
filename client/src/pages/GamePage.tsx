@@ -8,6 +8,44 @@ import type { ActionCard } from '@gremlins/shared';
 import '../styles/game.css';
 import '../styles/cards.css';
 
+/**
+ * 数值输入（主要用于**交锋出价**）。
+ *
+ * 原版交锋让玩家自己填金额、上限是自己的金钱，不是从固定档位里挑
+ * （用户报的 bug #4）。默认填上限、可直接改小。
+ */
+function NumericBid({
+  min, max, unit, onSubmit,
+}: {
+  min: number; max: number; unit: string;
+  onSubmit: (v: number) => void;
+}) {
+  const [value, setValue] = useState(String(max));
+  const num = Number(value);
+  const valid = Number.isFinite(num) && num >= min && num <= max;
+  return (
+    <div className="numeric-bid" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={1}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        style={{ width: 90 }}
+        aria-label="出价金额"
+      />
+      <span style={{ fontSize: 12 }}>{unit}</span>
+      <button disabled={!valid} onClick={() => onSubmit(num)}>
+        出价
+      </button>
+      <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
+        （{min}–{max}）
+      </span>
+    </div>
+  );
+}
+
 export function GamePage() {
   const game = useGameStore((s) => s.game);
   const selfId = useGameStore((s) => s.selfId);
@@ -181,12 +219,21 @@ export function GamePage() {
               {/* 挂起决策：选对手/选地点/选方向… */}
               {prompt.type === 'choose' && (
                 <div className="choice-list">
+                  {/* 数值输入（交锋出价）：原版是自己填金额，不是从档位里挑 */}
+                  {prompt.numeric && (
+                    <NumericBid
+                      min={prompt.numeric.min}
+                      max={prompt.numeric.max}
+                      unit={prompt.numeric.unit ?? ''}
+                      onSubmit={(v) => choose(prompt.type, [String(v)])}
+                    />
+                  )}
                   {(prompt.choices ?? []).map((c) => (
                     <button key={c.value} onClick={() => choose(prompt.type, [c.value])}>
                       {c.label}
                     </button>
                   ))}
-                  {!prompt.choices?.length && (
+                  {!prompt.choices?.length && !prompt.numeric && (
                     <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>无可用选项</span>
                   )}
                 </div>

@@ -234,6 +234,22 @@ export interface PlayerPrompt {
     /** 需要先选一名玩家 */
     needsTarget?: boolean;
   }>;
+  /**
+   * 数值输入提示（如**交锋出价**）。
+   *
+   * 原版交锋是让玩家**自己填金额**（服务端给 `MaxResultValue` 作为上限），
+   * 不是从固定档位里挑。早先界面只给了预设档位（10/20/30…），
+   * 玩家没法出任意价钱（用户报的 bug #4）。
+   */
+  numeric?: {
+    /** 允许范围（闭区间） */
+    min: number;
+    max: number;
+    /** 步进（UI 用） */
+    step: number;
+    /** 单位后缀（如「金钱」） */
+    unit?: string;
+  };
   message: string;
 }
 

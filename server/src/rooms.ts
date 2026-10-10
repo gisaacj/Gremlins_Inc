@@ -379,8 +379,10 @@ export function attachHandlers(io: SServer, socket: SSocket): void {
   });
 
   socket.on('game:play_card', (payload) => {
-    log.info('game:play_card cardId=', payload.cardId);
-    runAction('play_card', (_room, state) => playCard(state, socket.id, payload.cardId));
+    log.info('game:play_card cardId=', payload.cardId, 'target=', payload.targetPlayerId);
+    // 把界面上已选好的目标一起传下去，避免引擎再问一次（用户 bug #5）
+    runAction('play_card', (_room, state) =>
+      playCard(state, socket.id, payload.cardId, payload.targetPlayerId));
   });
 
   socket.on('game:choose', (payload) => {

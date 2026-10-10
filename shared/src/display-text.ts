@@ -22,7 +22,62 @@ export interface CardTextSource {
   text?: CardText;
   en?: { name?: string; description?: string };
   params?: number[];
+  /** 卡牌短名（`a031` / `t005`…），用于查下面的中文补全表 */
+  name?: string;
 }
+
+/**
+ * **中文补全表**。
+ *
+ * 游戏的中文语言包在**源头就被截断**：多条译文只保留了第一句，
+ * 最关键的部分（尤其监狱卡的**骰子结果表**）整段丢失。实测这些卡的
+ * 英文原文是完整的、中文只有半句，例如：
+ *
+ *   t005「逃出监狱」 中文只有「掷骰子：」，1-6 的结果表全没了
+ *   t002「大转盘」   中文只有「掷骰子 - 」，各点数的赔付全没了
+ *   t013「上诉」     中文只有「掷骰子：」，几点的结果全没了
+ *   t006「恶霸」     **中英都是空的**（原名 "Bully"），只能按数据反推
+ *
+ * 这里的译文**逐条对照英文原文与卡牌数据（`params` / `income` / `actions`）
+ * 人工写出**，不是机器整句意译；数字与术语都与数据一致（金钱/选票/罪恶/
+ * 齿轮/收入/贿赂/刑期）。若日后拿到官方中文，直接替换本表即可。
+ */
+const CARD_ZH_OVERRIDE: Record<string, string> = {
+  // ── 监狱卡：补回丢失的骰子结果表 ──
+  // params = [100,50,25,25,50,100]，actions = Casino()
+  t002: '掷骰子玩地下轮盘：1 = −100 金钱，2 = −50 金钱，3 = −25 金钱，'
+    + '4 = +25 金钱，5 = +50 金钱，6 = +100 金钱。',
+  // params = [1,1]，actions = ROLL(3, …Jailbreak)
+  t005: '掷骰子试图越狱：1、2、3 = +1 罪恶、刑期 +1 次走牌；'
+    + '4、5、6 = 传送到垃圾场。',
+  // params = [1]，actions = ROLL(3, …Apellation)
+  t013: '掷骰子申请上诉：1、2、3 = 无事发生；'
+    + '4、5、6 = 你获释！并额外获得 1 次走牌。',
+  // 中英皆空；按数据的 income（Term +2、Malice +1）补齐
+  t006: '你是狱中恶霸：刑期 +2 次走牌，+1 罪恶。',
+
+  // ── 行动卡：中文只留了第一句（多为"选择任意玩家。"），补回后半段 ──
+  // params = [3]，actions = ROLL(3, …Arrest)
+  a032: '掷骰子。若掷出 3 或更小：你被逮捕。',
+  a144: '掷骰子。若掷出 3 或更小：你被逮捕。',
+  // params = [2]，actions = OpponentGetMisfortune(2) + IgnoreCell
+  a098: '选择任意其他玩家：该玩家遭遇厄运（由你从 2 个中选 1 个）。'
+    + '厄运站点的规则不会影响你。',
+  // params = [1]，actions = OpponentSkipTurn(1) + MOVE + OpponentSkipTurn(1)
+  a130: '选择任意其他玩家：该玩家跳过 1 次走牌。'
+    + '【移动时】以此卡牌移动时：跳过 1 次走牌。',
+  // params = [1]，actions = OpponentSkipTurn(1) + PlayExtraCard
+  a182: '选择任意其他玩家：该玩家跳过 1 次走牌。你可以再使用一张卡牌。',
+  // params = [1]，actions = Teleport(垃圾场) + AddTurn(1)
+  a102: '传送到垃圾场。并额外获得 1 次走牌。',
+  // params = [1]，actions = Perm_AstralElevator(1) + MOVE + OpponentSkipTurn(1)
+  a123: '你可以直接从银行移动到天界。'
+    + '【移动时】以此卡牌移动时：跳过 1 次走牌。',
+  // moveText 里的规则（保留英文原文作为兜底）
+  a031: '【移动时】以此卡牌移动时：你可以逆着箭头方向移动。',
+  a076: '【移动时】以此卡牌移动时：跳过 1 次走牌。',
+  a099: '【交锋时】交锋获胜时：你可以丢弃此卡牌，代替支付金钱。',
+};
 
 /** 清掉控制符与多余空白（原版文案里有大量 `\r\r`） */
 export function cleanGameText(s: string): string {
@@ -304,6 +359,14 @@ function effectZh(raw: string, table: Array<[RegExp, string]>, params: number[])
 
 function composeRules(card: CardTextSource): string {
   const params = card.params ?? [];
+
+  // ── 0. 中文补全表优先 ──
+  //
+  // 这些卡的中文在源头被截断（尤其监狱卡的骰子结果表整段丢失），
+  // 补全表是按英文原文 + 卡牌数据人工写的，比残缺中文或纯英文都更可用。
+  const override = card.name ? CARD_ZH_OVERRIDE[card.name] : undefined;
+  if (override) return override;
+
   const mv = (card as { moveText?: string }).moveText;
   const hd = (card as { handText?: string }).handText;
 

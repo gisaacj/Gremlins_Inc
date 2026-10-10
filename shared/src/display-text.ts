@@ -138,6 +138,213 @@ function detokenize(s: string): string {
 }
 
 /**
+ * 卡牌 `[m]` / `[i]` 效果原文的**中文对照**。
+ *
+ * ⚠️ 背景（重要）：游戏的中文语言包在**源头就被截断**了 —— 每条译文只保留了
+ * 第一句，`[m]`/`[i]` 那些句子根本没被翻译进去（日文/韩文/俄文同样如此，
+ * 说明是基础数据的问题，不是某个语言包的缺失）。
+ * 实测：18 种 `[m]`/`[i]` 文本在中文包里**一条都没有**。
+ *
+ * 所以这里为这 18 条做中文对照。做法是**按语义单元拼装**，不是整句意译：
+ * 英文原文由「数值 + 资源符号 + 固定短语」组成（如 `-{1}$ if you use this
+ * card to move.`），逐段对照再拼回中文，术语与游戏内保持一致
+ * （金钱/选票/罪恶/齿轮/收入/贿赂）。这样既完整又不会走形。
+ *
+ * 少量无法拆解的整句（a031/a059/a066/a070/a099）**逐条给出**。
+ *
+ * 若日后拿到官方中文，把这里替换掉即可。
+ */
+/**
+ * 一条效果原文 → 中文的对照规则。
+ *
+ * 传入前会先做**归一化**（见 `normalizeForTranslate`）：
+ *  - `{n}` 占位符替换成具体数值
+ *  - 去掉 `数字（资源名）` 里的全角括号
+ * 这样模式只需要处理干净的数字，不用兼顾两种形态。
+ */
+const NUM = '(-?\\d+)';
+
+const MOVE_PHRASE_ZH: Array<[RegExp, string]> = [
+  // ── 可拆解的固定句式（先长后短，避免被短的先匹配）──
+  [new RegExp(`^Skip ${NUM} turn if you use this card to move\\.$`),
+    '以此卡牌移动时：跳过 %1 次走牌。'],
+  [new RegExp(`^([+-])${NUM}\\$ if you use this card to move\\.$`),
+    '以此卡牌移动时：%1%2 金钱。'],
+  [new RegExp(`^([+-])${NUM}\\^ if you use this card to move\\.$`),
+    '以此卡牌移动时：%1%2 罪恶。'],
+  [new RegExp(`^([+-])${NUM}& if you use this card to move\\.$`),
+    '以此卡牌移动时：%1%2 选票。'],
+  [new RegExp(`^([+-])${NUM}\\$, \\+?${NUM} extra turn if you use this card to move\\.$`),
+    '以此卡牌移动时：%1%2 金钱，并额外走牌 %3 次。'],
+  [new RegExp(`^([+-])${NUM}\\$, -${NUM}\\^ if you use this card to move\\.$`),
+    '以此卡牌移动时：%1%2 金钱、−%3 罪恶。'],
+  [new RegExp(`^([+-])${NUM}&, -${NUM}\\^ if you use this card to move\\.$`),
+    '以此卡牌移动时：%1%2 选票、−%3 罪恶。'],
+  [new RegExp(`^Get\\|, ${NUM}\\^ if you use this card to move\\.$`),
+    '以此卡牌移动时：获得收入，并 +%1 罪恶。'],
+  [/^Pay ~ if you use this card to move \(Governor doesn't pay\)\.$/,
+    '以此卡牌移动时：支付贿赂（镇长无需支付）。'],
+  // ── 整句（无法拆解）──
+  [/^You can move against the arrows when you use this card to move\.$/,
+    '以此卡牌移动时：你可以逆着箭头方向移动。'],
+  [/^To use this card to move, roll the dice and move accordingly\.$/,
+    '用此卡牌移动时：掷骰子，并按点数移动。'],
+  [/^If you use this card to move, choose another player\. A random card is drawn from their hand: use it to move\.$/,
+    '用此卡牌移动时：选择另一名玩家，随机抽其一张手牌，并以该牌的移动点数移动。'],
+  [new RegExp(`^When you use this card to move, you can pay ${NUM}\\$ to change move points to 4\\.$`),
+    '用此卡牌移动时：你可以支付 %1 金钱，把移动点数改为 4。'],
+];
+
+const HAND_PHRASE_ZH: Array<[RegExp, string]> = [
+  [/^If you win in a conflict you can discard this card instead of paying the money\.$/,
+    '交锋获胜时：你可以丢弃此卡牌，代替支付金钱。'],
+  [/^While in conflict you can discard this card and put a player you are in conflict with one spot away from you \(even against the arrows\)\. Your opponent pays you \$\d+$/,
+    '交锋中：你可以丢弃此卡牌，把与你交锋的玩家挪到离你 1 格远处（可逆箭头），并由对方付给你 50 金钱。'],
+];
+
+/**
+ * 翻译前的归一化。
+ *
+ * 1. `{n}` → 具体数值（用卡牌自己的 `params`）。**必须在翻译前做**：
+ *    中文对照表的模式是按"干净数字"写的，留着 `{n}` 会匹配不上
+ *    （实测 a140 会变成「- 金钱、− 罪恶」——数字被吞掉）。
+ * 2. 去掉 `数字（资源名）` 的全角括号：`detokenize` 会给英文句里的金额加括号，
+ *    而对照表的模式写的是 `-20$`（实测 a015 因 `-20（金钱）` 匹配失败）。
+ */
+function normalizeForTranslate(s: string, params: number[]): string {
+  // {n} → params[n-1]
+  let out = s.replace(/\{(\d+)\}/g, (m, i) => {
+    const v = params[Number(i) - 1];
+    return typeof v === 'number' ? String(v) : m;
+  });
+  // 去掉金额后的全角括号
+  out = out.replace(/(\d)（(?:金钱|选票|罪恶|齿轮|收入|贿赂|刑期|金币)）/g, '$1');
+  return out;
+}
+
+/** 把一条英文 `[m]`/`[i]` 原文翻成中文；无法对照时返回 undefined */
+function translateEffectText(
+  en: string,
+  table: Array<[RegExp, string]>,
+  params: number[] = [],
+): string | undefined {
+  const t = normalizeForTranslate(en.replace(/\s+/g, ' ').trim(), params);
+  for (const [re, zh] of table) {
+    const m = re.exec(t);
+    if (!m) continue;
+    // `%n` 对应第 n 个捕获组
+    return zh.replace(/%(\d)/g, (_s, i) => m[Number(i)] ?? '');
+  }
+  return undefined;
+}
+
+/**
+ * 把原版文案里的 `[m]` / `[i]` 记号换成可读前缀。
+ *
+ * 原版用这两个记号标注"这张牌**用于移动**时 / **留在手中（交锋）**时的额外规则"，
+ * 它们**不是**卡面正文的一部分。原先直接显示成「[m] …」，玩家看不懂。
+ */
+function expandMarkers(s: string): string {
+  return s
+    .replace(/\[m\]\s*/gi, '【移动时】')
+    .replace(/\[i\]\s*/gi, '【交锋时】')
+    .replace(/^【[^】]*】$/, '')      // 只剩一个空记号（后面没有任何文字）→ 丢掉
+    .trim();
+}
+
+/**
+ * 把卡面正文 + `[m]` 移动效果 + `[i]` 手中效果拼成一段可读文本。
+ *
+ * 原版卡面只印 `[m]` / `[i]`，完整规则在鼠标悬停提示里；这里把它们合并，
+ * 玩家一眼就能看到全部效果（**无需悬停**）。
+ */
+/**
+ * 把一段成品文本里**残留的英文效果句**换成中文对照。
+ *
+ * 为什么需要这一步：`pickText` 在中文被截断时会整体回退到英文，而英文描述
+ * **本身就带着** `[m] …` 那句（如 a076 的中文只有 `[m]`，于是整体回退成
+ * `[m] Skip {1} turn if you use this card to move.`）。
+ * 所以「先翻译、再拼接」的做法抓不到它 —— 必须在**拼装完成后**再过一遍，
+ * 把这些英文句子逐句替换掉。
+ */
+function translateResidualEnglish(s: string, params: number[]): string {
+  // 标记前缀要**先摘掉再对照**：对照表的模式是按英文原句（`^You can…`）写的，
+  // 带着「【移动时】」前缀会锚定失败（实测 a031/a076 就是因此没被替换）。
+  const MARK = /^(【移动时】|【交锋时】)/;
+  const lines = s.split(/　|\n/);
+  const out = lines.map((line) => {
+    const m = MARK.exec(line);
+    const prefix = m ? m[1] : '';
+    let body = m ? line.slice(prefix.length) : line;
+    if (/[A-Za-z]{3,}/.test(body)) {
+      const sentences = body.split(/(?<=[.!?])\s+/);
+      body = sentences.map((sent) => {
+        const zh = translateEffectText(sent, MOVE_PHRASE_ZH, params)
+          ?? translateEffectText(sent, HAND_PHRASE_ZH, params);
+        return zh ?? sent;
+      }).join(' ');
+      // 整段再试一次（应对没有句末标点的情况）
+      const whole = translateEffectText(body, MOVE_PHRASE_ZH, params)
+        ?? translateEffectText(body, HAND_PHRASE_ZH, params);
+      if (whole) body = whole;
+    }
+    return prefix + body;
+  });
+  return out.join('　');
+}
+
+/**
+ * 把英文 `[m]`/`[i]` 原文转成中文；无法对照时返回 undefined。
+ *
+ * 依赖 `translateEffectText` 的对照表；`params` 用于把 `{n}` 换成具体数值。
+ */
+function effectZh(raw: string, table: Array<[RegExp, string]>, params: number[]): string | undefined {
+  return translateEffectText(cleanGameText(raw), table, params);
+}
+
+function composeRules(card: CardTextSource): string {
+  const params = card.params ?? [];
+  const mv = (card as { moveText?: string }).moveText;
+  const hd = (card as { handText?: string }).handText;
+
+  // ── 1. 先算出「移动时 / 交锋时」两段中文 ──
+  //    一律从**原始英文**出发（它是完整的），再套中文对照表。
+  const moveZh = mv && mv.trim() ? effectZh(mv, MOVE_PHRASE_ZH, params) : undefined;
+  const handZh = hd && hd.trim() ? effectZh(hd, HAND_PHRASE_ZH, params) : undefined;
+
+  // ── 2. 主体文本 ──
+  let main = detokenize(displayCardDescription(card, { formatted: true }));
+
+  // 主体若因中文截断而回退到英文，它会**自带** `[m] … / [i] …` 那几句英文。
+  // 这些句子我们已经用中文给出了（moveZh / handZh），所以要把它们从主体里摘掉，
+  // 否则会中英重复。
+  //
+  // 摘掉的规则：从 `[m]` / `[i]` 记号一直吃到**换行或结尾**。
+  // （原版把这两句用换行分隔，`cleanGameText` 之前是 `\r\n`。）
+  if (moveZh) main = main.replace(/\[m\][^\n]*/gi, ' ');
+  if (handZh) main = main.replace(/\[i\][^\n]*/gi, ' ');
+
+  if (!moveZh && !handZh) {
+    // 没有可替换的中文 → 至少把记号变成可读标签
+    main = expandMarkers(main);
+  }
+  main = main.replace(/\s+/g, ' ').trim();
+
+  const parts: string[] = [];
+  if (main) parts.push(main);
+  if (moveZh) parts.push(`【移动时】${moveZh}`);
+  else if (mv && mv.trim() && !main.includes('移动时')) {
+    parts.push(`【移动时】${detokenize(applyParams(cleanGameText(mv), params))}`);
+  }
+  if (handZh) parts.push(`【交锋时】${handZh}`);
+  else if (hd && hd.trim() && !main.includes('交锋时')) {
+    parts.push(`【交锋时】${detokenize(applyParams(cleanGameText(hd), params))}`);
+  }
+
+  return parts.join('　');
+}
+
+/**
  * 卡牌**规则说明**的成品文本 —— 直接可显示的那种。
  *
  * ⚠️ 这是给 UI 用的**首选**函数。原因：原版文案里用的是**单个符号**表示资源
@@ -145,16 +352,17 @@ function detokenize(s: string): string {
  * 实测 **中文文案里 78/186 张卡带裸符号**（`$`×33、`*`×22、`&`×17 …）。
  * 直接把原始文案丢给界面，玩家看到的就是「选择任意玩家：-4&」这种天书。
  *
- * 本函数把三步一次做完：
+ * 本函数一次做完：
  *  1. 替换 `{n}` 占位符（用卡牌自己的 `params`）
  *  2. 把资源符号归一化成内部标记（`[[vote]]` 等）
  *  3. 把标记还原成**中文名**（选票 / 金钱 / …）
+ *  4. 把 `[m]` / `[i]` 记号换成「【移动时】」「【交锋时】」并补全缺失的效果原文
  *
  * 需要"用图标渲染"的场景请改用 `displayCardDescription(card, {formatted:true})`，
  * 它会保留 `[[token]]` 标记交给调用方处理。
  */
 export function displayCardRules(card: CardTextSource): string {
-  return detokenize(displayCardDescription(card, { formatted: true }));
+  return composeRules(card);
 }
 
 /** 卡牌三条文案的显示版本 */

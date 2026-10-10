@@ -153,7 +153,9 @@ export function createState(args: EngineInitArgs): EngineState {
     chaosPlayed: [],
     mayorId: undefined,
     nextElectionRound: ELECTION_INTERVAL,
-    targetScore: args.targetScore ?? 30,
+    // 目标齿轮数：原版是**可配置**的（`GConst.GOAL_SCORE_1..19` = 10..100）。
+    // 缺省取最低档 10（= GOAL_SCORE_1），而不是凭空写一个 30。
+    targetScore: args.targetScore ?? constNum('GOAL_SCORE_1', 10),
     mapId,
     chaosEnabled: args.chaosEnabled !== false,
     log: [],

@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import { ACTION_CARDS } from '@gremlins/shared/gamedata';
 import {
   CHARACTERS, PERM_TRIGGERS, cellTypeOf, createState, getMap, getPlayer,
-  moveWithCard, resolvePending,
+  moveWithCard, resolvePending, skipPlay,
 } from '@gremlins/shared/engine';
 import type { EngineState } from '@gremlins/shared/engine';
 
@@ -71,7 +71,14 @@ function findPoliceApproach(st: EngineState) {
   return undefined;
 }
 
-/** 把玩家送到警察格并触发落点结算 */
+/**
+ * 把玩家送到警察格并触发**站点效果**。
+ *
+ * ⚠️ 原版顺序是 Move → Conflict → UseCard → **UseCell**：
+ * 站点效果不在 Move 阶段结算，而在 UseCard 阶段收尾时（skipPlay）。
+ * 所以这里走完牌之后要再 skipPlay 一次，才真正进入警察站交互。
+ * （早先的实现把站点效果放在 Move 阶段，这个辅助函数是照着旧行为写的。）
+ */
 function landOnPolice(money = 500) {
   const st = game();
   const p = getPlayer(st, 'p0')!;
@@ -82,7 +89,9 @@ function landOnPolice(money = 500) {
   p.cellId = pick!.origin.id;
   p.hand = [pick!.card.id];
   const r = moveWithCard(st, p.id, pick!.card.id, pick!.dest.id);
-  return { st, p, r, pick: pick! };
+  // 进入 UseCard 阶段收尾 → 此时才结算警察站
+  const sp = skipPlay(st, p.id);
+  return { st, p, r, sp, pick: pick! };
 }
 
 function answer(st: EngineState, value: string): void {
@@ -102,18 +111,19 @@ check('停在警察格会挂起"付贿赂 / 掷骰"二选一', () => {
   void p;
 });
 check('选项里给出的金额 = 贿赂值（$20 + 罪恶）', () => {
-  const { st, p } = landOnPolice(500);
-  p.res.malice = 10; // 贿赂应为 30
-  // 重新触发一次以反映新的罪恶
+  // ⚠️ 罪恶必须在**落地之前**设好：站点效果在 UseCard 阶段才结算，
+  // 事后改 `malice` 已经晚了（贿赂额那一刻就定下了）。
   const st2 = game();
   const p2 = getPlayer(st2, 'p0')!;
   p2.res.money = 500;
-  p2.res.malice = 10;
+  p2.res.malice = 10;                       // 贿赂应为 20 + 10 = 30
   st2.currentIndex = st2.players.indexOf(p2);
   const pick = findPoliceApproach(st2)!;
   p2.cellId = pick.origin.id;
   p2.hand = [pick.card.id];
   moveWithCard(st2, p2.id, pick.card.id, pick.dest.id);
+  skipPlay(st2, p2.id);                     // UseCard 阶段收尾 → 此时结算警察站
+  assert.ok(st2.pending?.kind.startsWith('police:'), `应挂起警察站，实际 ${st2.pending?.kind}`);
   const label = st2.pending!.options.find((o) => o.value === 'pay')!.label;
   assert.match(label, /30/, `贿赂应为 30，实际标签「${label}」`);
   console.log(`      ${label}`);

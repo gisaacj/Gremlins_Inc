@@ -46,6 +46,15 @@ export interface CellTypeDef {
   building: boolean;
   /** 是否可选（玩家可跳过） */
   optional: boolean;
+  /**
+   * 落地时是否**自动**结算格子效果。
+   *
+   * 默认 true（由 optional:false 推导）。少数格子虽然 optional:false，
+   * 但当玩家有**角色能力带来的二选一**时不该自动结算 ——
+   * 目前只有「收入」格：收藏家「挖宝」可改为换牌而不是双倍收入。
+   * 这类格子请显式设 autoCellEffect: false。
+   */
+  autoCellEffect?: boolean;
   num: number;
   params: number[];
   labels: string[];
@@ -58,6 +67,12 @@ export const CELL_TYPES: CellTypeDef[] = [{"id":"14030686299553685508","cellType
 export const CELL_TYPE_BY_NAME: Record<string, CellTypeDef> = Object.fromEntries(
   CELL_TYPES.map((c) => [c.cellType, c])
 );
+
+// 生成数据里没有 autoCellEffect（本实现的补充），这里按语义标上。
+// 收入格 optional=false 本会自动结算，但收藏家「挖宝」要在
+// 「双倍收入 / 换牌」之间二选一，所以不能自动结算 ——
+// 改为通过可选动作给出，玩家选了才结算。
+CELL_TYPE_BY_NAME.Income.autoCellEffect = false;
 
 export const CELL_TYPE_BY_ID: Record<string, CellTypeDef> = Object.fromEntries(
   CELL_TYPES.map((c) => [c.id, c])

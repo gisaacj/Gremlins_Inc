@@ -10,7 +10,7 @@ import {
 } from './model.js';
 import {
   canAffordCard, canMoveWithCard, canPlayCard, createState, endTurn,
-  resolveLanding, resolvePending, startMove, takeJailTurn,
+  finishTurnActions, resolveLanding, resolvePending, startMove, takeJailTurn,
 } from './state.js';
 import type { EngineInitArgs } from './state.js';
 import { playEffectCard } from './state.js';
@@ -316,10 +316,24 @@ export function playCard(
   return maybeAutoEnd(state);
 }
 
-/** 跳过打牌 = UseCard 阶段结束，直接换人（终点格效果已在 Move 阶段结算完毕） */
+/**
+ * 跳过打牌 = UseCard 阶段结束，**先结算欠着的站点效果（UseCell）**，再换人。
+ *
+ * ⚠️ 顺序（原版）：Move → Player Conflict → UseCard → **UseCell**。
+ * 站点效果不在 Move 阶段结算，而是在这里 —— 这样玩家才有机会
+ * 在站点效果生效**之前**打出手里的牌（用户实测反馈的 bug #4）。
+ *
+ * 若站点效果自己挂起（买保险 / 付贿赂 / 须决策），返回该挂起而不换人。
+ */
 export function skipPlay(state: EngineState, playerId: string): ActionResult {
   if (!isTurn(state, playerId)) return fail('不是你的回合');
   if (state.pending) return fail('有未完成的决策');
+
+  // 结算欠着的格子效果（若已离开该格则自动跳过）
+  const cellPending = finishTurnActions(state);
+  if (cellPending) return ok(cellPending);
+  if (state.pending) return ok(state.pending);
+
   const r = nextTurn(state);
   return r.ok ? ok() : fail(r.error ?? '换人失败');
 }
@@ -531,6 +545,16 @@ export function runOption(
   const r = doOption(state, playerId, optionId, targetId);
   // 原版规则：用建筑可选动作 = 结束本回合（不能同时打牌）
   if (r.ok && !r.needsTarget) {
+    // ⚠️ 顺序：Move → Conflict → UseCard → **UseCell**。
+    // 选了一个站点动作就等于完成了 UseCell —— 必须把"欠着的格子效果"
+    // 清掉，否则会残留到下一个回合（`endTurn` 不会清 pendingCellEffect）。
+    // 有些选项自身已经把格子效果做完了（如 `excavation.income` 直接给了
+    // 双倍收入），这类不要重复结算，所以额外标记 cellResolved。
+    if (state.pendingCellEffect?.playerId === playerId) {
+      if (!p.flags['cellResolved']) finishTurnActions(state);
+      state.pendingCellEffect = undefined;
+      p.flags['cellResolved'] = 1;
+    }
     const nr = nextTurn(state);
     if (!nr.ok) return { ok: false, error: nr.error };
   }

@@ -21,7 +21,7 @@
 import assert from 'node:assert/strict';
 import { CARD_BY_NAME, CELL_TYPE_BY_NAME } from '@gremlins/shared/gamedata';
 import {
-  CHARACTERS, createState, getMap, getPlayer, resolvePending, startConflict, startMove,
+  CHARACTERS, createState, getMap, getPlayer, resolvePending, skipPlay, startConflict, startMove,
 } from '@gremlins/shared/engine';
 import type { EngineState } from '@gremlins/shared/engine';
 
@@ -64,11 +64,19 @@ function setupDuel(cellType: string, opts: { money?: number } = {}) {
   return { st, a, b, cell: cell!, card };
 }
 
-/** 驱动到走完（自动应答所有挂起），返回经过的挂起链 */
+/**
+ * 驱动到走完（自动应答所有挂起），返回经过的挂起链。
+ *
+ * ⚠️ 原版顺序 Move → Conflict → UseCard → **UseCell**：
+ * 站点效果在 UseCard 阶段收尾（`skipPlay`）才结算，
+ * 所以应答完 Move/Conflict 的挂起后还要再 `skipPlay` 一次，
+ * 才会看到站点交互（police / danger 等）并把它结算掉。
+ */
 function drive(st: EngineState, cardId: string, playerId: string) {
   const seen: string[] = [];
   let r = startMove(st, playerId, cardId);
   let g = 0;
+  // 阶段一：Move / Conflict 的挂起
   while (st.pending && g++ < 16) {
     const pd = st.pending;
     seen.push(pd.kind);
@@ -79,6 +87,18 @@ function drive(st: EngineState, cardId: string, playerId: string) {
     }
     const rr = resolvePending(st, pd.playerId, pick);
     st.pending = rr.pending;
+  }
+  // 阶段二：UseCard 收尾 → UseCell（站点效果）
+  if (!st.pending && st.pendingCellEffect) {
+    skipPlay(st, playerId);
+    let g2 = 0;
+    while (st.pending && g2++ < 16) {
+      const pd = st.pending;
+      seen.push(pd.kind);
+      const pick = pd.options.slice(0, Math.max(1, pd.min ?? 1)).map((o) => o.value);
+      const rr = resolvePending(st, pd.playerId, pick);
+      st.pending = rr.pending;
+    }
   }
   return { seen, r };
 }

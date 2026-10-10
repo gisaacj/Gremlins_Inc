@@ -2,7 +2,7 @@ import type { ActionCard } from '@gremlins/shared';
 import {
   CARD_BY_ID, cardCategory, cardBuildingLabels, cardCostLabel,
   cardHarvestLabel, cardOutcomeLabel, cardTheme, CARD_CATEGORY_ZH,
-  cleanGameText, displayCardDescription, displayCardName,
+  cleanGameText, displayCardRules, displayCardName,
 } from '@gremlins/shared';
 
 interface CardProps {
@@ -39,7 +39,7 @@ function useCardDisplay(card: ActionCard) {
      * 中文缺失或被截断时回退英文。直接用 `card.text.description`
      * 会出现「丢弃{1}张卡牌。」这种带占位符的文案（实测 78/186 张卡）。
      */
-    rules: displayCardDescription(card),
+    rules: displayCardRules(card),
     name: displayCardName(card),
     flavor: cleanGameText(card.text.flavor ?? ''),
     /**

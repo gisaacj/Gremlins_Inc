@@ -19,11 +19,11 @@ import {
   random, release, rollDice, runActions, runElection, type ActionContext,
 } from './interp.js';
 import { addRes, transferRes } from './resources.js';
-import { displayCardDescription, displayCardName } from '../display-text.js';
+import { displayCardName, displayCardRules } from '../display-text.js';
 import {
   applyImmediatePermanents, discardPermanent, extraBribeFrom, fireTrigger,
 } from './permanents.js';
-import { bribeModifier, breathingTaxFrom, fireAbility } from './abilities.js';
+import { bribeModifier, breathingTaxFrom, fireAbility, hasCellChoice, insuranceCost } from './abilities.js';
 import { availableOptions, diceTableOf } from './options.js';
 import { centralMisfortuneId } from '../board-view.js';
 
@@ -450,15 +450,16 @@ export function startMove(
 
   // pass-through 只结算途经格（不含终点——终点由 landing 处理）
   resolvePassThrough(state, p, path.slice(0, -1), mvFlags);
-  // 终点格效果在 Move 阶段立即结算（站点效果：收入/贿赂/警察/厄运/冒险/地狱）
+  // 终点：判定交锋（先）+ **登记欠着的格子效果**（UseCard 阶段收尾时再做）。
+  // ⚠️ 这里**不再**设 cellResolved —— 否则 maybeAutoEnd 会立刻结束回合，
+  // 玩家就没机会在站点效果之前用牌（原版顺序是 Move→Conflict→UseCard→UseCell）。
   if (!p.flags['ignoreCell']) {
     const pending = resolveLanding(state, p);
     if (pending) {
       state.pending = pending;
       return { ok: true, path, pending };
     }
-    // 落地效果已结算（无挂起）——标记，让 maybeAutoEnd 可以自动结束回合
-    p.flags['cellResolved'] = 1;
+    // 无挂起：格子效果欠着（pendingCellEffect），等 skipPlay / 打牌后结算
   } else {
     p.flags['cellResolved'] = 1;
   }
@@ -871,33 +872,72 @@ export function resolveLanding(state: EngineState, p: EnginePlayer): PendingChoi
   const cellType = cellTypeOf(cell);
   if (!cellType) return;
 
-  // ── **先交锋，后格子效果** ──
+  // ══ 原版回合顺序 ══
+  //   1) Move（走牌移动）
+  //   2) Player Conflict —— "two players stop on the same spot"，
+  //      输家被逮捕、**只有赢家留在该站**（TAG.Game_Label_Conflict_Description）
+  //   3) UseCard —— 打出卡牌。**站点效果在此之前不生效**
+  //   4) UseCell —— 结算所在格/建筑的效果
   //
-  // 原版文案（TAG.Game_Label_Conflict_Description）：
-  //   "The player who bids the most pays up and **remains on the spot**,
-  //    the other player is **arrested**."
-  // 即：输家被带走、只有赢家留在该站 —— 格子效果是**留给留下来的人**结算的。
-  // 若先结算格子效果，等于"没争到站点的人也照吃了站点效果"，与原版不符。
+  // ⚠️ 这里曾经把"格子效果"放在 Move 阶段立即结算（即第 2 步之前），
+  // 于是玩家**还没机会用牌**就被强制处理站点（用户实测：到警察站先被问
+  // "处理站点"，处理完才问"用不用牌"）——顺序与原版不符，已改为推迟。
   //
-  // ⚠️ 但"先交锋"必须解决续跑问题：交锋挂起被应答后，引擎不会自动回到
-  // resolveLanding。所以这里把**欠着的格子效果**记在 state.pendingCellEffect 上，
-  // 等交锋结算完再用 resumePendingCellEffect 补做。
+  // 推迟到哪：`finishTurnActions()`（UseCard 阶段收尾时调用）。
+  // 这样"用牌离开"就真的能躲开站点效果，与原版一致。
   const conflict = maybeStartConflict(state, p, cell, cellType);
   if (conflict) {
     state.pendingCellEffect = { playerId: p.id, cellId: cell.id };
     return conflict;
   }
 
-  // 无交锋 → 直接结算格子效果
+  // 不在这里结算格子效果 —— 只标记"已到站，欠一次 UseCell"
+  state.pendingCellEffect = { playerId: p.id, cellId: cell.id };
+  return undefined;
+}
+
+/**
+ * UseCard 阶段收尾：补做**欠着**的格子效果（UseCell）。
+ *
+ * 调用时机：
+ *  - `skipPlay()`（玩家选择不再用牌）
+ *  - 打出一张效果牌之后
+ *  - 交锋结算完（赢家留在格上）之后
+ *
+ * 若格子效果本身又挂起（买保险 / 付贿赂），把挂起返回给调用方。
+ * 若玩家已经离开该格（用移动牌走了 / 被挪走），则**跳过**原格效果。
+ *
+ * @returns 有挂起则返回它
+ */
+export function finishTurnActions(state: EngineState): PendingChoice | undefined {
+  if (state.pending) return state.pending;
+  const pendingEffect = state.pendingCellEffect;
+  if (!pendingEffect) return undefined;
+
+  const p = getPlayer(state, pendingEffect.playerId);
+  if (!p) { state.pendingCellEffect = undefined; return undefined; }
+
+  // 已离开该格 → 不吃原格效果（这正是"先用牌离开"能躲开站点的原因）
+  if (p.cellId !== pendingEffect.cellId) {
+    state.pendingCellEffect = undefined;
+    p.flags['cellResolved'] = 1;
+    return undefined;
+  }
+
+  state.pendingCellEffect = undefined;
+  const cell = getCell(state, p.cellId);
+  if (!cell) { p.flags['cellResolved'] = 1; return undefined; }
+  const cellType = cellTypeOf(cell);
+  if (!cellType) { p.flags['cellResolved'] = 1; return undefined; }
+
   const cellPending = resolveCellEffect(state, p, cell, cellType);
   if (cellPending) {
-    // resolveCellEffect 的 police/danger 分支只 return 挂起项，不写 state.pending
-    // （只有 startConflict 会写）。这里统一补上，维持
-    // 「返回了挂起 ⇒ state.pending 已同步」这个不变量。
     state.pending = cellPending;
     return cellPending;
   }
-  return undefined;
+  p.flags['cellResolved'] = 1;
+  // 格子效果没挂起 → 补一次交锋判定（格子可能把人挪到别人格上）
+  return resumeLandingAfterCellEffect(state, p);
 }
 
 /**
@@ -912,29 +952,12 @@ export function resolveLanding(state: EngineState, p: EnginePlayer): PendingChoi
  *  - 赢家可能因 [i] 卡（a070「敲诈！」）被**挪到相邻格**，此时已不在原格，
  *    就不该再吃原格效果 —— 所以要比对 cellId。
  *  - 输家被逮捕送进监狱，它不是本函数记录的对象。
+ *
+ * @deprecated 已被 `finishTurnActions()` 取代（逻辑完全并入其中）。
+ * 保留此薄封装是为了不必改动各处调用点。
  */
 function resumePendingCellEffect(state: EngineState): PendingChoice | undefined {
-  const pendingEffect = state.pendingCellEffect;
-  if (!pendingEffect) return undefined;
-  state.pendingCellEffect = undefined;
-
-  const p = getPlayer(state, pendingEffect.playerId);
-  if (!p) return undefined;
-  if (p.cellId !== pendingEffect.cellId) {
-    pushLog(state, p.id, '已离开该站，跳过本站效果');
-    return undefined;
-  }
-  const cell = getCell(state, p.cellId);
-  if (!cell) return undefined;
-  const cellType = cellTypeOf(cell);
-  if (!cellType) return undefined;
-
-  const cellPending = resolveCellEffect(state, p, cell, cellType);
-  if (cellPending) {
-    state.pending = cellPending;
-    return cellPending;
-  }
-  return undefined;
+  return finishTurnActions(state);
 }
 
 /**
@@ -1003,6 +1026,17 @@ function resolveCellEffect(
   cell: NonNullable<ReturnType<typeof getCell>>,
   cellType: NonNullable<ReturnType<typeof cellTypeOf>>,
 ): PendingChoice | undefined {
+  // 「不自动结算」的格子 → 交给可选动作（玩家选完再进来）。
+  //
+  // ⚠️ 但**只有真正有选择的人**才该被推迟。早先无条件 `return undefined`，
+  // 结果没有该能力的玩家（如银行家）停在收入格时既没自动结算、
+  // 也没有任何选项可点，格子效果就此丢失（实测：金钱完全不涨）。
+  // 所以这里要确认玩家确实拿得到选项。
+  if (cellType.autoCellEffect === false && hasCellChoice(state, p, cell.cellType)) {
+    pushLog(state, p.id, `停在 ${cellLabel(cell)}（${cellType.cellType}）：等待选择`);
+    return undefined;
+  }
+
   pushLog(state, p.id, `停在 ${cellLabel(cell)}（${cellType.cellType}）`);
 
   // 建筑自身效果
@@ -1086,7 +1120,10 @@ function resolveCellEffect(
       // 扔到 1 时：有保险 → 选对手抽厄运；无保险 → 自己抽厄运。
       // OptionalFlag=false，落地即触发（不走可选动作）。
       if (p.flags['ignoreCell']) break;
-      const cost = cellType.params[0] ?? 40;
+      // ⚠️ 必须走 insuranceCost()：收藏家有「财产保险」时是 10，否则 40。
+      // 早先这里硬编码 `cellType.params[0] ?? 40`，导致收藏家落地仍被收 40
+      // （`options.ts` 的可选动作路径算对了，两处算法不一致）。
+      const cost = insuranceCost(p);
       const canPay = p.res.money >= cost;
       pushLog(state, p.id, `冒险格：可花 ${cost} 金钱买保险`);
       state.pendingInput = { ...(state.pendingInput ?? {}), [`danger:${p.id}`]: String(cost) };
@@ -1693,7 +1730,7 @@ export function takeJailTurn(
         value: c.cardId,
         // 用显示层：替换 `{n}`、清控制符、中文缺失时回退英文。
         // 直接用 `c.description` 会显示成「丢弃{1}张卡牌。」这种带占位符的文案。
-        label: `${displayCardName(c)}——${displayCardDescription(c)}`,
+        label: `${displayCardName(c)}——${displayCardRules(c)}`,
       })),
       { value: 'jailDecline', label: '全部拒绝（刑期 −1，+1 罪恶）' },
     ],

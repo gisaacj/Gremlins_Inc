@@ -16,7 +16,7 @@ import { CHARACTER_ABILITIES, type AbilitySpec } from './engine/abilities.js';
 // `display-text.ts`——那边只依赖 gamedata，engine 也能安全使用；
 // 这里转出去，方便 UI 只 import 一个模块。
 export {
-  cleanGameText, displayCardDescription, displayCardName, displayCardText,
+  cleanGameText, displayCardDescription, displayCardName, displayCardRules, displayCardText,
   isIncompleteZh, type CardTextSource,
 } from './display-text.js';
 

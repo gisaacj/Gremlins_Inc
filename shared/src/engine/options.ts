@@ -27,7 +27,7 @@ import {
 } from './model.js';
 import { addRes, hasRes, transferRes } from './resources.js';
 import { discardFromHand, drawMisfortune, drawTo, rollDice } from './interp.js';
-import { abilitiesOf } from './abilities.js';
+import { abilitiesOf, excavationCount, hasExcavation, insuranceCost } from './abilities.js';
 
 // =============================================================
 // 骰子结算表（数据驱动）
@@ -210,6 +210,30 @@ function cellOptions(state: EngineState, p: EnginePlayer): OptionSpec[] {
     out.push(...stationOptions(state, p, cell.cellType, pr, def?.text.description ?? ''));
   }
 
+  // ── 收藏家「挖宝」：停在收入格时可二选一 ──
+  //
+  // 收入格被标为 `autoCellEffect: false`（见 gamedata/decks.ts），
+  // 所以不会自动结算，而是在这里给出两个选项，玩家选了才进
+  // `resolveCellEffect` 结算。原版文案是"在藏宝阁寻宝时：可重掷一次"
+  // 与本能力（`Collector_Excavation`，nums=[6]）**不是同一条**。
+  // 本实现按用户实测行为：**双倍收入 或 换牌**。
+  if (cell.cellType === 'Income') {
+    const exc = abilitiesOf(p).find((s) => s.flag === 'excavation');
+    if (exc) {
+      const n = exc.nums?.[0] ?? 6;
+      out.push({
+        id: 'excavation.income',
+        label: `双倍收入（+${p.res.income * 2} 金钱）`,
+        description: '按收入格正常结算：获得双倍收入',
+      });
+      out.push({
+        id: 'excavation.swap',
+        label: `换牌（重抽 ${n} 张）`,
+        description: `放弃本次收入，把手里的 ${p.hand.length} 张换成 ${n} 张新牌`,
+      });
+    }
+  }
+
   // 角色能力带来的可选动作：与格子的 OptionalFlag 无关
   out.push(...abilityOptions(state, p, cell.cellType));
 
@@ -334,12 +358,10 @@ function stationOptions(
       break;
     }
 
-    // 冒险格：买保险（Param1=40，收藏家角色优惠→10）
+    // 冒险格：买保险（基础 40；收藏家「财产保险」优惠→10）
     case 'Danger': {
-      let cost = pr[0] || 40;
-      for (const a of abilitiesOf(p)) {
-        if (a.flag === 'insuranceDiscount') cost = a.nums?.[0] ?? 10;
-      }
+      // 与 resolveCellEffect 共用同一算法，避免两处不一致
+      const cost = insuranceCost(p);
       out.push({
         id: 'danger.insure',
         label: `买保险 ${cost} 金`,
@@ -425,22 +447,13 @@ function abilityOptions(state: EngineState, p: EnginePlayer, cellType: string): 
         break;
       }
 
-      // 收入格：双倍收入 / 抽牌留 1 张
-      case 'excavation': {
-        if (cellType !== 'Income') break;
-        const n = a.nums?.[0] ?? 6;
-        out.push({
-          id: 'ability.doubleIncome',
-          label: `双倍收入（+${p.res.income} 金）`,
-          description: a.rule,
-        });
-        out.push({
-          id: `ability.drawAndKeep.${n}`,
-          label: `抽 ${n} 张，留 1 张`,
-          description: a.rule,
-        });
+      // 收藏家「挖宝」的选项由 `cellOptions` 的收入格分支统一给出
+      // （`excavation.income` / `excavation.swap`）。
+      // ⚠️ 这里原先还生成了一份 `ability.doubleIncome` / `ability.drawAndKeep`，
+      // 两份**语义不一致**（旧的那份把"双倍收入"写成了单倍、把"换牌"写成了
+      // "抽 N 留 1"），界面上会同时出现 4 个选项。已删除，避免歧义。
+      case 'excavation':
         break;
-      }
 
       default:
         break;
@@ -739,6 +752,48 @@ export function doOption(
       return doneUsed(`掷出 ${r.dice}：${r.message}`);
     }
 
+    // ---- 收藏家「挖宝」：收入格二选一 ----
+    //
+    // 收入格被标为 `autoCellEffect: false`（见 gamedata/decks.ts），
+    // 所以落地不自动结算，由这里的两个选项决定。
+    // 选完即结束本回合（`runOption` 之后会换人）。
+    case 'excavation': {
+      if (cell.cellType !== 'Income') return fail('只能在收入格使用');
+      if (!hasExcavation(p)) return fail('没有「挖宝」能力');
+      const n = excavationCount(p);
+
+      if (parts[1] === 'income') {
+        // 正常结算收入格：双倍收入
+        const gain = p.res.income * 2;
+        addRes(p, 'money', gain);
+        // 本分支**已经**把收入格的落地效果做完了 → 标记，避免 runOption 再结算一次
+        p.flags['cellResolved'] = 1;
+        logIt(`「挖宝」：双倍收入 +${gain} 金钱`);
+        return doneUsed(`双倍收入，+${gain} 金钱`);
+      }
+
+      if (parts[1] === 'swap') {
+        // 换牌：放弃本次收入，把手牌换成 n 张新牌。
+        // 本分支**没有**执行收入格效果（这正是"换牌"的代价），
+        // 所以不设 cellResolved —— 让 runOption 走 finishTurnActions
+        // 去结算收入格（它内部会因为 autoCellEffect=false 而不重复给钱）。
+        const dropped = [...p.hand];
+        const drawn = drawTo(state, p, n);
+        // 旧牌全部进弃牌堆；手上留下**刚抽到的**那些。
+        //
+        // ⚠️ 早先写成"从 p.hand 里删掉仍在 dropped 里的牌"，但 `dropped.includes(id)`
+        // 只按 id 判断，同一张牌的实体新旧分不开 —— 若重抽抽回同一张牌，
+        // 就会被误删（实测：1 张手牌换牌后手里变成 0 张）。
+        // 改为精确重建：手牌 = 刚抽到的那批。
+        p.hand = drawn;
+        state.discard.push(...dropped);
+        logIt(`「挖宝」：放弃收入，换掉 ${dropped.length} 张，重抽 ${drawn.length} 张`);
+        return doneUsed(`换牌：弃 ${dropped.length} 张、抽 ${drawn.length} 张`);
+      }
+
+      return fail(`未知的挖宝选项 ${optionId}`);
+    }
+
     // ---- 角色能力带来的可选动作 ----
     case 'ability': {
       const which = parts[1];
@@ -779,10 +834,10 @@ export function doOption(
           return doneUsed(`卖 ${inc} 收入，得 ${gain} 金`);
         }
         case 'doubleIncome': {
-          const gain = p.res.income;
-          addRes(p, 'money', gain);
-          logIt(`角色能力·挖宝：双倍收入 +${gain} 金`);
-          return doneUsed(`双倍收入，+${gain} 金`);
+          // ⚠️ 这条路径先前只加**一倍**收入（与「双倍收入」的名字不符），
+          // 也没走 resolveCellEffect，会漏掉收入格的其它结算。
+          // 现在统一由 `excavation.income` 处理（见上面 case 'excavation'）。
+          return fail('已改用 excavation.income');
         }
         case 'drawAndKeep': {
           const n = Number(parts[2] ?? 6);

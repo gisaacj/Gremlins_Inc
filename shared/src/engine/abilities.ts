@@ -726,6 +726,62 @@ export function rollDiceWithAbilities(
 }
 
 /**
+ * 玩家是否拥有「挖宝」（收藏家）。
+ *
+ * 目前有它的角色只有收藏家。抽成函数是为了让"是否推迟格子结算"
+ * （`resolveCellEffect`）与"是否给出选项"（`options.cellOptions`）
+ * 用**同一个判据** —— 两边不一致就会出现"既没自动结算、也没选项可点"
+ * 的死角（曾经真的发生过：银行家停在收入格金钱完全不涨）。
+ */
+export function hasExcavation(p: EnginePlayer): boolean {
+  return abilitiesOf(p).some((s) => s.flag === 'excavation');
+}
+
+/** 挖宝可换的牌数（`Collector_Excavation` 的参数，缺省 6） */
+export function excavationCount(p: EnginePlayer): number {
+  return abilitiesOf(p).find((s) => s.flag === 'excavation')?.nums?.[0] ?? 6;
+}
+
+// ---------------------------------------------------------------- 交易相关
+
+/**
+ * 玩家在**当前所在格**是否真的能拿到可选动作。
+ *
+ * 与 `options.ts` 的 `availableOptions` 同源判据，避免两处漂移。
+ * 注意：这里只关心"格子能给出选项"这一件事，不检查回合归属等前置条件。
+ */
+export function hasCellChoice(state: EngineState, p: EnginePlayer, cellType: string): boolean {
+  // 目前唯一需要"推迟结算换选择"的格子：收入格 + 收藏家「挖宝」
+  if (cellType === 'Income') return hasExcavation(p);
+  return false;
+}
+
+/**
+ * 冒险格（Danger）买保险要花的钱。
+ *
+ * 原版：`Danger.params[0]` = 40；**收藏家**有「财产保险」
+ * （`Collector_Property_Insurance`，nums `[10]`）时降为 10。
+ *
+ * ⚠️ 这里做成**单一来源**：早先 `options.ts` 的可选动作路径算对了（10），
+ * 而 `resolveCellEffect` 的 Danger 分支硬编码 `params[0] ?? 40`，
+ * 于是收藏家实际落地时**仍然被收 40** —— 两处算法不一致。
+ * 现在两边都调本函数。
+ */
+export function insuranceCost(p: EnginePlayer): number {
+  const disc = abilitiesOf(p).find((s) => s.flag === 'insuranceDiscount');
+  if (disc) return disc.nums?.[0] ?? 10;
+  return 40;
+}
+
+/**
+ * 冒险格保险费的"基础值"版本（不查角色能力，只按格子参数）。
+ * 供需要区分"格子原价 / 角色优惠价"的场景使用。
+ */
+export function baseInsuranceCost(cellParam: number | undefined): number {
+  return cellParam && cellParam > 0 ? cellParam : 40;
+}
+
+/**
  * 政治家「呼吸税」给**所有人**的贿赂加成。
  *
  * 原版 `GPlayer.GetBribe()`：

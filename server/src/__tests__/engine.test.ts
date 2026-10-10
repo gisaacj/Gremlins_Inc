@@ -288,10 +288,20 @@ check('卡 a001「游说」序列执行：选择对手 → 扣 1 选票', () => 
   assert.ok(r.pending, '应挂起等待选择对手');
   assert.equal(r.pending!.kind, 'SelectOpponent');
 
+  const casterVoteBefore = p.res.vote;
+  const incVote = card.income?.vote ?? 0;
+  // a001 的卡面「收获」是 +3 选票（数据 income.vote = 3），在**打出卡牌那一刻**
+  // 就已加给发起者，所以这里它应该已经是 3。
+  assert.equal(casterVoteBefore, incVote,
+    `打出后发起者应已有卡牌收获 +${incVote}，实际 ${casterVoteBefore}`);
+
   const r2 = resolvePending(s, p.id, [target.id]);
   assert.ok(r2.ok, r2.reason);
   assert.equal(target.res.vote, 4, `${target.name} 选票应为 4，实际 ${target.res.vote}`);
-  assert.equal(p.res.vote, 0, '发起者不应误伤自己');
+  // 应答挂起**不应**再加一次收获（那会变成 +6）；
+  // 同时验证 OpponentLoseVotes 没有误伤发起者。
+  assert.equal(p.res.vote, casterVoteBefore,
+    `应答挂起不该重复发放收获，也不该误伤发起者：${casterVoteBefore} → ${p.res.vote}`);
 });
 check('挂起决策记录在 state.pending，且只能由发起者回答', () => {
   const s = newGame();

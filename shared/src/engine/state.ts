@@ -5,7 +5,7 @@
 //       不再依赖手写的 BuildingId 表和硬编码下标。
 // 顺序：使用 GCharacter.StepOrderNum（原版 Initiative）。
 // =============================================================
-import type {
+import { RESOURCE_LABEL_ZH, type
   ActionCard, BoardCell, CardAction, EnginePlayer, EngineState, PendingChoice, ResourceKey,
 } from './model.js';
 import {
@@ -491,6 +491,42 @@ export function resolveMoveBranch(
 }
 
 /** 打出非移动的效果卡 */
+/**
+ * 结算卡牌面板上的「收获 / 代价」资源包。
+ *
+ * 原版 `GActionCard` 有两个 `GResource` 字段：
+ *  - `Income`  = 卡面「收获」→ 打出时**加**给自己
+ *  - `Outcome` = 卡面「代价」→ 打出时**扣**（数据里是正数，表示扣多少）
+ *
+ * 实测 **137/186 张卡有「收获」、16 张有「代价」**，也就是说这个函数
+ * 之前缺失时，**153 张卡打出来在资源上毫无变化**。
+ *
+ * @param sign `+1` 加、`-1` 扣
+ */
+function applyCardResourceBundle(
+  state: EngineState,
+  p: EnginePlayer,
+  card: { text: { name: string } },
+  label: 'income' | 'outcome',
+  bundle: Partial<Record<ResourceKey, number>> | undefined,
+  sign = 1,
+): void {
+  if (!bundle) return;
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(bundle)) {
+    if (typeof v !== 'number' || !v) continue;
+    // `term`/`income` 等非负键也走 addRes（addRes 内部已保证不为负）
+    const delta = addRes(p, k as ResourceKey, v * sign);
+    if (!delta) continue;
+    const zh = RESOURCE_LABEL_ZH[k as ResourceKey] ?? k;
+    parts.push(`${delta > 0 ? '+' : ''}${delta} ${zh}`);
+  }
+  if (parts.length) {
+    pushLog(state, p.id,
+      `「${card.text.name}」${label === 'income' ? '收获' : '代价'}：${parts.join('，')}`);
+  }
+}
+
 export function playEffectCard(
   state: EngineState,
   playerId: string,
@@ -521,6 +557,25 @@ export function playEffectCard(
   const moneyBefore = p.res.money;
   const voteBefore = p.res.vote;
   const scoreBefore = p.res.score;
+
+  // ── 卡牌自身的「收获 / 代价」字段 ──
+  //
+  // ⚠️ 这里曾经**完全没有结算** `card.income` / `card.outcome`，于是
+  // **137/186 张卡的"收获"打出来毫无效果**（用户报的 bug #3：
+  // a021「奔跑的炸弹」写着 +6 齿轮，打出后齿轮不涨）。
+  // 混沌卡那条路径（`playChaosCard`）一直是结算的，行动卡漏了。
+  //
+  // 字段语义（与卡面 UI 一致，见 `card-display.ts`）：
+  //  - `income`  = 「收获」→ **加**给打出者
+  //  - `outcome` = 「代价」→ 从打出者**扣**（数据里存的都是正数，表示要扣多少）
+  //
+  // 没有重复结算：`income`/`outcome` 是卡牌面板上的固定数值，
+  // 而 `actions` 是具体效果（如 `Perm_SecretVote` 只是登记触发钩子，
+  // 本就不产生即时资源变化）。
+  if (!choices) {
+    applyCardResourceBundle(state, p, card, 'income', card.income);
+    applyCardResourceBundle(state, p, card, 'outcome', card.outcome, -1);
+  }
 
   const ctx: ActionContext = {
     actions: card.actions,

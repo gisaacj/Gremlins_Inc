@@ -120,15 +120,21 @@ check('「稳健投资」(a127, Perm_Income 30) 收入 +30', () => {
   givePermanent(s, p, 'a127');
   assert.equal(p.res.income, before + 30);
 });
-check('「自动官僚」(a117, Perm_Bribe 10) 其他玩家贿赂 +10，持卡者不受影响', () => {
+check('「自动官僚」(a117, Perm_Bribe 10) 其他玩家贿赂 +10，持卡者不被自己加成', () => {
   const s = newGame();
   const holder = mustCurrentPlayer(s);
   const o = other(s, holder);
   const baseOther = bribeAmount(s, o);
-  const baseHolder = bribeAmount(s, holder);
   givePermanent(s, holder, 'a117');
   assert.equal(bribeAmount(s, o), baseOther + 10, '其他玩家贿赂应 +10');
-  assert.equal(bribeAmount(s, holder), baseHolder, '持卡者自身不应受影响');
+  // ⚠️ a117 的卡面「收获」是 +6 齿轮 +1 罪恶（数据 income.malice = 1），
+  // 打出时会给持卡者 +1 罪恶，从而**抬高持卡者自己的贿赂**（贿赂 = 20 + 罪恶）。
+  // 这里要验证的是 **Perm_Bribe 只加给别人、没有加给持卡者** ——
+  // 所以直接按"贿赂 = 20 + 自身罪恶"反推，排除卡牌收获的干扰。
+  // （本局两名角色都不是法官/乞丐，基础贿赂就是 20 + 罪恶，无其它修正）
+  assert.equal(bribeAmount(s, holder), 20 + holder.res.malice,
+    `持卡者自身不该被 Perm_Bribe 加成：贿赂应等于 20 + 自身罪恶(${holder.res.malice})，`
+    + `实际 ${bribeAmount(s, holder)}`);
 });
 
 console.log('\n=== 3. 触发型：事件驱动 ===');

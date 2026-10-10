@@ -755,9 +755,13 @@ export function resolvePending(
 
     state.pending = undefined;
 
-    // 记录目的地，让移动循环在中途建筑可提前停止
+    // ⚠️ 目的地要交给 `startMove` 去**算出整条路径**（`options.destinationTileId`），
+    // 只设 `destTileId` 只够"到了就提前停"，中途仍会在岔路口乱走
+    // （用户报的 bug #1：二手货移动不符合预期）。
     const dest = pending.resume.scratch?.destinationTileId;
-    const result = startMove(state, playerId, moveCardId);
+    const result = startMove(state, playerId, moveCardId, undefined, {
+      destinationTileId: dest,
+    });
     if (result.ok && state.moveCursor && dest) {
       state.moveCursor.destTileId = dest;
     }

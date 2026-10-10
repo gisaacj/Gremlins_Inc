@@ -17,7 +17,7 @@ import { playEffectCard } from './state.js';
 import { discardPermanent } from './permanents.js';
 import { addRes } from './resources.js';
 import { runActions } from './interp.js';
-import { rollDice, drawTo } from './interp.js';
+import { rollDice, drawTo, random } from './interp.js';
 import { availableOptions, doOption, type OptionSpec } from './options.js';
 import { isDiscardMoveCard, isReverseMoveCard } from '../board-view.js';
 
@@ -244,8 +244,10 @@ export function discardMoveCard(
   if (opponent.id === playerId) return fail('不能选择自己');
   if (opponent.hand.length === 0) return fail('对手没有手牌');
 
-  // 随机弃对手一张牌
-  const rIdx = Math.floor(Math.random() * opponent.hand.length);
+  // 随机弃对手一张牌 —— 用**引擎的 RNG**（`random(state)`），
+  // 不用 `Math.random()`：后者与引擎序列不同源，会破坏单机模式的可复现性
+  // （同一 seed 每次结果不同），也让"回放/测试"失去意义。
+  const rIdx = Math.floor(random(state) * opponent.hand.length) % opponent.hand.length;
   const stolenId = opponent.hand[rIdx];
   opponent.hand.splice(rIdx, 1);
   state.discard.push(stolenId);

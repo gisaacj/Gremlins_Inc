@@ -1220,8 +1220,8 @@ function enterConflictBidding(
   state.pending = {
     kind,
     playerId: challenger.id,
-    prompt: `玩家交锋：与 ${defender.name} 竞价（出价上限 ${challenger.res.money}）`,
-    options: bidOptions(challenger.res.money),
+    prompt: `玩家交锋：与 ${defender.name} 竞价（出价上限 ${conflictBidMax(challenger)}）`,
+    options: bidOptions(conflictBidMax(challenger)),
     min: 1,
     max: 1,
     resume: {
@@ -1263,6 +1263,12 @@ export function applyConflictEscape(
  * 原版是**数值输入**（`MaxResultValue` 为上限），这里用几档常见金额 + 全押，
  * 上限为出价者的金钱；引擎按数值结算，因此调用方也可以直接传任意金额。
  */
+export function conflictBidMax(p: EnginePlayer): number {
+  // 上限是**出价者自己**的金钱：原版 MaxResultValue 由服务端算（本产物内无组装点），
+  // 但“不能出超过自己持有的钱”是必然的，否则可以喊出付不起的价。
+  return Math.max(0, Math.floor(p.res.money));
+}
+
 function bidOptions(max: number): Array<{ value: string; label: string }> {
   const opts: Array<{ value: string; label: string }> = [{ value: '0', label: '不出价（0）' }];
   for (const v of [10, 20, 30, 50, 75, 100, 150, 200]) {
@@ -1293,7 +1299,17 @@ export function resolveConflictBid(
   const key = pendingKind;
   state.pendingInput ??= {};
   const store = state.pendingInput;
-  store[`${key}:${playerId}`] = String(Math.max(0, Math.floor(bid)));
+  // 出价必须落在 [0, 出价者自己的金钱] 区间内。
+  // 原版由服务端给出上限（MaxResultValue），客户端 OnSetClick 校验
+  // `0 <= num <= maxResValue` 后才回传，服务端另有校验（本产物内不可见）。
+  // 这里做同样的夹取，避免喊出付不起的价 —— 否则“高者付款”会退化成
+  // “高者只付一点点钱却赢下交锋”。
+  const bidder = getPlayer(state, playerId);
+  const capped = Math.min(
+    Math.max(0, Math.floor(bid)),
+    bidder ? conflictBidMax(bidder) : Math.max(0, Math.floor(bid)),
+  );
+  store[`${key}:${playerId}`] = String(capped);
 
   // 还差一方 → 问另一位
   const other = playerId === challenger.id ? defender : challenger;
@@ -1301,8 +1317,8 @@ export function resolveConflictBid(
     state.pending = {
       kind: pendingKind,
       playerId: other.id,
-      prompt: `玩家交锋：与 ${playerId === challenger.id ? challenger.name : defender.name} 竞价（出价上限 ${other.res.money}）`,
-      options: bidOptions(other.res.money),
+      prompt: `玩家交锋：与 ${playerId === challenger.id ? challenger.name : defender.name} 竞价（出价上限 ${conflictBidMax(other)}）`,
+      options: bidOptions(conflictBidMax(other)),
       min: 1,
       max: 1,
       resume: {
@@ -2012,4 +2028,6 @@ export function allCharacterIds(): string[] {
 }
 
 
+
+
 

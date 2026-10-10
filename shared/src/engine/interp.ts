@@ -13,7 +13,7 @@ import type {
   ActionType, EnginePlayer, EngineState, PendingChoice, ResourceKey, CardAction,
 } from './model.js';
 import {
-  CARD_BY_ID, MISFORTUNE_CARDS, cellLabel, characterName, getCell, getMap,
+  CARD_BY_ID, CHARACTER_BY_ID, MISFORTUNE_CARDS, cellLabel, characterName, getCell, getMap,
 } from './model.js';
 import { fireTrigger as firePermTrigger } from './permanents.js';
 import { fireAbility } from './abilities.js';
@@ -354,17 +354,131 @@ export function drawMisfortune(state: EngineState, p: EnginePlayer): void {
 }
 
 // ---------------------------------------------------------------- 选举
+/** 选举加票基数（原版 `GConst.ELECTION_VOTE_BONUS` = 3） */
+const ELECTION_VOTE_BONUS = 3;
+
+/**
+ * 政治家「议会人脉」在选举中提供的额外票数。
+ *
+ * 原版：`GetCharacterAbilityParam(EAction.Politician_Connections, 2, 2)`
+ * —— 第二个参数是**默认值**，第三个是 `ActionParams` 的下标。
+ * 所以"拿不到该能力时用 2"是源码自带的行为。
+ *
+ * ⚠️ `Politician_Connections` **不在导出的角色数据里**
+ * （角色 ActionList 只有 Charisma / Populist / Astral_Club_2），
+ * 因此目前恒返回默认 2。若日后找到该能力的参数，在此处读取即可。
+ */
+function politicianConnectionsBonus(p: EnginePlayer): number {
+  const char = p.characterId ? CHARACTER_BY_ID[p.characterId] : undefined;
+  if (!char || char.name !== 'Politician') return 0;
+  // 角色定义的 actions 里找该能力（数据缺失时退回源码默认值 2）
+  const ability = (char.actions ?? []).find(
+    (a) => String(a.type) === 'Politician_Connections',
+  );
+  const raw = ability?.params?.[2] ?? ability?.params?.[0];
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 2;
+}
+
+/**
+ * 选举（镇长/总督）。
+ *
+ * ## 判定依据是**选票**，不是罪恶 ⚠️
+ *
+ * 原版 `CAvatarForm.CheckVotesMedal()` / `CElectionForm.showAddVote()`：
+ * ```csharp
+ * dictionary.Add(player.PlayerID, player.Resources.Vote);   // ← 基数是**选票**
+ * ...
+ * if (player.Resources.Malice == minMalice)                 // 罪恶只决定"谁拿加成"
+ *     dictionary[player.PlayerID] += CD.Game.ELECTION_VOTE_BONUS;
+ * ```
+ * 即：**票数最高者当选**；「罪恶最低」只是给那人**额外加 3 票**。
+ *
+ * 极端例子：某人有 10 票、罪恶 5；另一人 1 票、罪恶 0。
+ * 后者得 1+3=4 票，**前者 10 票仍然当选** —— 不是"罪恶最低者当选"。
+ *
+ * 这一点曾被我在会话记录里写错成"罪恶最低者获胜"，已按源码更正。
+ *
+ * ## 加成来源（两处）
+ *  1. **罪恶最低者** +3 票；若**全员罪恶相同**则无人获得（`minMaliceAll` 分支）。
+ *  2. **政治家「议会人脉」**（`Politician_Connections`）+N 票。
+ *     `GetCharacterAbilityParam(EAction.Politician_Connections, 2, 2)`
+ *     → 该能力 `ActionParams[2]`，拿不到时用**默认值 2**。
+ *
+ * ⚠️ `Politician_Connections` **不在导出的角色数据里**（角色 ActionList 只有
+ * Charisma / Populist / Astral_Club_2），所以这里恒走"默认 2"。
+ * 若日后在别处找到该能力的参数，改 `politicianConnections` 即可。
+ *
+ * ## 平局
+ * 票数并列时，源码再按**罪恶较低**筛选一次；若筛选后仍**包含全部玩家**，
+ * 则视为无人当选（不换镇长、不加齿轮）。见 `CAvatarForm` 用
+ * `list.Count < CD.Game.Players.Count` 作为"有人当选"的条件。
+ */
 export function runElection(state: EngineState): void {
+  const n = state.players.length;
+
+  // 1) 基础票数
+  const votes = new Map<string, number>();
+  for (const p of state.players) votes.set(p.id, p.res.vote);
+
+  // 2) 罪恶最低者 +3，全员同罪恶则无人获得
   const minMalice = Math.min(...state.players.map((p) => p.res.malice));
-  const ranked = state.players
-    .map((p) => ({ p, votes: p.res.vote + (p.res.malice === minMalice ? 3 : 0) }))
-    .sort((a, b) => b.votes - a.votes);
-  const top = ranked[0];
-  if (!top) return;
+  const allSameMalice = state.players.every((p) => p.res.malice === minMalice);
+  if (!allSameMalice) {
+    for (const p of state.players) {
+      if (p.res.malice === minMalice) {
+        votes.set(p.id, (votes.get(p.id) ?? 0) + ELECTION_VOTE_BONUS);
+      }
+    }
+  }
+
+  // 3) 政治家「议会人脉」加成
+  //
+  // 不 import `abilities.ts` 的 `abilitiesOf`：那边已经 import 本文件，
+  // 反向依赖会形成循环。这里只需查一张静态表，直接读角色定义即可。
+  for (const p of state.players) {
+    const bonus = politicianConnectionsBonus(p);
+    if (bonus > 0) votes.set(p.id, (votes.get(p.id) ?? 0) + bonus);
+  }
+
+  // 4) 最高票
+  const maxVotes = Math.max(...[...votes.values()]);
+  let tied = state.players.filter((p) => votes.get(p.id) === maxVotes);
+  if (!tied.length) return;
+
+  // 5) 票数并列 → 取**罪恶较低**者
+  //
+  // 源码顺序（`CAvatarForm` 640-659）：先按最高票收集 `list`，
+  // **再**用"罪恶最低"过滤 `list`。所以过滤后正常只剩少数人。
+  if (tied.length > 1) {
+    const minTiedMalice = Math.min(...tied.map((p) => p.res.malice));
+    tied = tied.filter((p) => p.res.malice === minTiedMalice);
+  }
+
+  // 6) 若过滤后**仍包含全部玩家**（全员票数与罪恶都一样）→ 无人当选
+  //
+  // 源码用 `list.Count < CD.Game.Players.Count` 作为"有人当选"的条件。
+  // 注意这是**过滤之后**的比较：例如 2 人局里两人票数并列但罪恶不同，
+  // 过滤后 list 只剩 1 人 < 2，**仍然有人当选**（不要用过滤前的长度判断）。
+  if (tied.length >= n) {
+    log(state, state.players[0]!.id,
+      `选举结束：全部玩家票数并列（各 ${maxVotes} 票），无人当选`);
+    state.nextElectionRound = state.round + ELECTION_INTERVAL;
+    return;
+  }
+
+  // 仍有多人并列（票数与罪恶都相同，但未覆盖全员）时，取座位顺序靠前者。
+  //
+  // ⚠️ 原版这一步由**服务端**决定并通过 `ComElectionWindow.WinPlayerID` 下发，
+  // 而服务端程序集不在本次反编译产物内，所以"多人完全并列"时原版选谁
+  // **无法证实**。这里用座位顺序保证确定性，属于**推断**。
+  const winner = tied[0]!;
+  state.mayorId = winner.id;
   // 镇长特权：就职 +1 齿轮
-  state.mayorId = top.p.id;
-  top.p.res.score += 1;
-  log(state, top.p.id, `选举结束：${nameOf(top.p)} 当选镇长（${top.votes} 票），就职 +1 齿轮`);
+  winner.res.score += 1;
+  log(state, winner.id,
+    `选举结束：${nameOf(winner)} 当选镇长（${votes.get(winner.id)} 票），就职 +1 齿轮`
+    + (winner.res.malice === minMalice && !allSameMalice ? '（罪恶最低，含 +3 票加成）' : ''));
   state.nextElectionRound = state.round + ELECTION_INTERVAL;
 }
 

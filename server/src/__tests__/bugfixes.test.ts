@@ -153,12 +153,20 @@ check('a041 说清"对方付多少"', () => {
   console.log(`      ${d.slice(0, 70)}`);
 });
 
-check('英文回退时金额加全角括号，中文自身带数字则不加', () => {
-  const en = displayCardRules(CARD_BY_NAME['a008']!);
-  assert.ok(/250（金钱）/.test(en), `英文句应加括号：${en}`);
+check('纯中文句子不加多余括号，且数值保留', () => {
+  // ⚠️ 这条原先断言"英文回退时加全角括号"，但那些卡的**中文后来被人工补全**了
+  // （见第 21 轮的 `CARD_ZH_OVERRIDE`），不再走英文回退，原断言随之失效。
+  // 现在断言的是**稳定的不变量**：纯中文句子不加括号、数值不丢。
   const zh = displayCardRules(CARD_BY_NAME['a001']!);
   assert.ok(/-1选票/.test(zh), `中文句不该加括号：${zh}`);
-  console.log(`      英: 250（金钱）／中: -1选票`);
+  assert.ok(!/（金钱）|（选票）/.test(zh), `纯中文不该出现全角括号：${zh}`);
+
+  // 曾经中英混杂的 a008，现在应完全是中文且保留 250 这个数值
+  const a008 = displayCardRules(CARD_BY_NAME['a008']!);
+  assert.ok(!/[A-Za-z]{3,}/.test(a008), `a008 应完全中文化：${a008}`);
+  assert.ok(/250/.test(a008), `a008 应保留金额 250：${a008}`);
+  console.log(`      a001: ${zh}`);
+  console.log(`      a008: ${a008}`);
 });
 
 // ─────────────────────────────────────────────────────────────

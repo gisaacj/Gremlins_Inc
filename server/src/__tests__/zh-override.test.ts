@@ -8,7 +8,7 @@
 // 运行: npx tsx server/src/__tests__/zh-override.test.ts
 // =============================================================
 import assert from 'node:assert/strict';
-import { ACTION_CARDS, JAIL_CARDS } from '@gremlins/shared/gamedata';
+import { ACTION_CARDS, CHAOS_CARDS, JAIL_CARDS, MISFORTUNE_CARDS } from '@gremlins/shared/gamedata';
 import { displayCardRules } from '@gremlins/shared';
 
 let pass = 0;
@@ -23,7 +23,15 @@ const action = (n: string) => ACTION_CARDS.find((c) => c.name === n)!;
 
 console.log('=== 被补全的卡都真的有中文缺陷（否则不该覆盖） ===');
 
-const OVERRIDDEN = ['t002', 't005', 't006', 't013', 'a032', 'a098', 'a102', 'a123', 'a130', 'a144', 'a182', 'a031', 'a076', 'a099'];
+const OVERRIDDEN = [
+  // 监狱卡：骰子结果表被截断
+  't002', 't005', 't006', 't013',
+  // 行动卡：只有 [m]/[i] 记号，正文缺失
+  'a031', 'a032', 'a076', 'a098', 'a099', 'a102', 'a123', 'a130', 'a144', 'a182',
+  // 行动卡：中文只留主语，英文模板套中文资源名 → 中英混杂
+  'a008', 'a010', 'a024', 'a034', 'a039', 'a041', 'a043', 'a046', 'a062',
+  'a063', 'a064', 'a066', 'a074', 'a087', 'a097', 'a111', 'a163', 'a166', 'a180',
+];
 
 check('每张被补全的卡：中文确实残缺（比英文短很多或为空）', () => {
   for (const n of OVERRIDDEN) {
@@ -147,6 +155,26 @@ check('补全后的文本不含成句英文', () => {
     const d = displayCardRules(c);
     assert.ok(!/[A-Za-z]{3,}(\s+[A-Za-z]{2,}){2,}/.test(d), `${n} 仍有英文：${d}`);
   }
+});
+
+check('全部 250 张卡（行动/监狱/厄运/混沌）的显示文本都不含成句英文', () => {
+  const all = [...ACTION_CARDS, ...JAIL_CARDS, ...MISFORTUNE_CARDS, ...CHAOS_CARDS];
+  const bad = all.filter((c) => /[A-Za-z]{3,}(\s+[A-Za-z]{2,}){1,}/.test(displayCardRules(c)));
+  assert.equal(bad.length, 0,
+    `仍有英文：${bad.slice(0, 5).map((c) => `${c.name}「${c.text.name}」`).join('、')}`);
+  console.log(`      ${all.length} 张卡全部为中文`);
+});
+
+check('不存在"中英混杂"的卡（英文模板套中文资源名，比纯英文更糟）', () => {
+  const all = [...ACTION_CARDS, ...JAIL_CARDS, ...MISFORTUNE_CARDS, ...CHAOS_CARDS];
+  const bad = all.filter((c) => {
+    const d = displayCardRules(c);
+    // 【移动时】/【交锋时】后面本来就可能带英文兜底，不算混杂
+    return /[\u4e00-\u9fa5]/.test(d) && /\b[A-Za-z]{3,}\b/.test(d)
+      && !/【移动时】|【交锋时】/.test(d);
+  });
+  assert.equal(bad.length, 0,
+    `中英混杂：${bad.slice(0, 5).map((c) => `${c.name}「${c.text.name}」`).join('、')}`);
 });
 
 console.log(`\n通过 ${pass} 项，失败 ${fail} 项`);

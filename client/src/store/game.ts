@@ -103,6 +103,8 @@ interface GameStore {
   // 游戏
   game: SerializedGameState | null;
   prompt: PlayerPrompt | null;
+  /** 连接层错误（如未配置服务端地址），供 UI 提示 */
+  connectionError: string | null;
   logs: ChatMessage[];
   error: { code: string; message: string; ts: number } | null;
   winnerId: string | null;
@@ -186,6 +188,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   selfId: '',
   game: null,
   prompt: null,
+  connectionError: null,
   logs: [],
   error: null,
   winnerId: null,
@@ -238,7 +241,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   init: () => {
-    const socket = getSocket();
+    // 原生壳里若还没配置服务端地址，`getSocket()` 会抛错。
+    // 这里接住它并给出可读提示，而不是让整个应用崩在初始化阶段。
+    let socket: ReturnType<typeof getSocket>;
+    try {
+      socket = getSocket();
+    } catch (e) {
+      const msg = (e as Error).message;
+      log.error(`init 失败：${msg}`);
+      set({ connected: false, connectionError: msg });
+      return;
+    }
     if (socket.connected) {
       set({ connected: true, mySocketId: socket.id ?? '', selfId: socket.id ?? '' });
     }

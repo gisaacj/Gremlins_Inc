@@ -1,12 +1,16 @@
 import { useState } from 'react';
 import { CHARACTERS, characterAbilities } from '@gremlins/shared';
 import { useGameStore } from '../store/game.js';
+import {
+  getServerUrl, isNativeApp, normalizeServerUrl, setServerUrl,
+} from '../net/socket.js';
 import '../styles/menu.css';
 
 type Tab = 'solo' | 'create' | 'join';
 
 export function Menu() {
   const connected = useGameStore((s) => s.connected);
+  const connectionError = useGameStore((s) => s.connectionError);
   const createRoom = useGameStore((s) => s.createRoom);
   const joinRoom = useGameStore((s) => s.joinRoom);
   const startLocalGame = useGameStore((s) => s.startLocalGame);
@@ -24,6 +28,21 @@ export function Menu() {
   const [name, setName] = useState('');
   const [roomId, setRoomId] = useState('');
   const [targetCogs, setTargetCogs] = useState(30);
+
+  // 服务端地址（移动端必填：原生壳里不能靠 window.location.origin）
+  const native = isNativeApp();
+  const [serverUrl, setServerUrlInput] = useState(() => {
+    const cur = getServerUrl();
+    return cur && cur !== '/' ? cur : '';
+  });
+  const [serverSaved, setServerSaved] = useState(false);
+
+  const handleSaveServer = () => {
+    setServerUrl(normalizeServerUrl(serverUrl));
+    setServerSaved(true);
+    // 保存后会断开旧连接；重新加载一次拿到新连接
+    setTimeout(() => window.location.reload(), 300);
+  };
 
   const handleCreate = async () => {
     if (!name.trim()) {
@@ -188,9 +207,31 @@ export function Menu() {
               </>
             )}
 
+            <div className="menu-row">
+              <label>服务器</label>
+              <input
+                type="text"
+                value={serverUrl}
+                onChange={(e) => { setServerUrlInput(e.target.value); setServerSaved(false); }}
+                placeholder="例如 192.168.1.10:3000"
+              />
+              <button onClick={handleSaveServer} disabled={!serverUrl.trim()}>
+                {serverSaved ? '已保存' : '保存'}
+              </button>
+            </div>
+            <div className="menu-status">
+              {native
+                ? '移动端需填写运行服务端的电脑 IP 与端口（例如 192.168.1.10:3000）'
+                : '浏览器与服务端同源部署时可留空；跨机联机时填写服务端地址'}
+            </div>
+
             <div className={`menu-status ${!connected ? 'warning' : ''}`}>
               <span className={`connected-dot ${connected ? '' : 'off'}`} />
-              {connected ? '已连接服务器' : '正在连接服务器...（单机对战不受影响）'}
+              {connectionError
+                ? connectionError
+                : connected
+                  ? '已连接服务器'
+                  : '正在连接服务器...（单机对战不受影响）'}
             </div>
           </>
         )}

@@ -428,6 +428,53 @@ import 了 `interp.ts`，反向依赖会**形成循环**，改为就地一行判
 
 ---
 
+## 本轮：移动端连通性（修掉一个真实阻断 bug）
+
+计划做 APK 构建，先查环境，结果**在环境之前先查出一个真 bug**。
+
+### 一、原生壳永远连不上服务端
+
+原实现取连接地址：
+
+```ts
+const url = import.meta.env.VITE_SERVER_URL
+         || (import.meta.env.DEV ? '/' : window.location.origin);
+```
+
+Capacitor 的 WebView 把页面放在**自己的本地 scheme** 上
+（Android 默认 `https://localhost`），所以 `window.location.origin`
+指的是**设备本机**，不是服务器。→ APK 装上后**永远连不上**，且看不出原因。
+`capacitor.config.ts` 里那句"实际部署时在 App 内设置中填写服务端 IP"
+说明当时就留了这个坑。
+
+**修复**：地址改为**运行时**可配置（`localStorage`，主菜单新增「服务器」一栏，
+支持裸 `IP:端口` 自动补协议）；原生壳未配置时**明确报错**并显示给玩家，
+而不是静默连 `localhost`。网页版行为不变（仍默认同源）。
+详见 [`移动端构建.md`](移动端构建.md)。
+
+### 二、APK 构建环境不齐（已如实记录，未擅自安装）
+
+| 组件 | 要求 | 本机 |
+|---|---|---|
+| JDK | Capacitor 6 需 **17** | 只有 15 和 8 ❌ |
+| SDK `platforms/` | 需 android-3x | **空** ❌ |
+| SDK `build-tools/` | 需 3x.x.x | **空** ❌ |
+| 网络 | dl.google.com | 可达 ✅ |
+
+补齐约需下载 500MB+。**已与用户确认：暂不安装**，步骤写成
+[`移动端构建.md`](移动端构建.md) 备查；该文档同时**明确标注**了
+"从未跑通"的部分，避免把未验证的步骤当成可用。
+
+### 三、顺带记录一个测试组织上的坑
+
+我最初把客户端代码的测试放进 `server/src/__tests__/`，结果
+`server/tsconfig.json` 的 `rootDir` 不允许跨项目引用 → 类型检查失败。
+已移到 `tools/test-server-url.mts`（用 tsx 直接跑，不进编译项目）。
+另：`import.meta.env` 在非 Vite 环境是 `undefined`，直接取属性会抛错，
+已改为 optional 取值。
+
+---
+
 ## 一、重要前提：反编译范围的边界 ⚠️
 
 **必须先读这一节**，否则会误判文档的权威程度。

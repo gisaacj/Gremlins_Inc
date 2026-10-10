@@ -236,8 +236,7 @@ export interface EngineState {
 
 // ---------------------------------------------------------------- 棋盘索引
 export function getMap(state: Pick<EngineState, 'mapId'>): BoardMap {
-  return BOARD_MAPS.find((m) => m.id === state.mapId)
-    ?? CUSTOM_MAP;
+  return CUSTOM_MAP;
 }
 
 export function cellIndex(map: BoardMap): Map<string, BoardCell> {

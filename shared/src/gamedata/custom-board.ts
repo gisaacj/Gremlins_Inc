@@ -1,171 +1,143 @@
-import type { BoardCell, BoardMap } from './board.js';
+/**
+ * 原版棋盘 + 用户自定义坐标。
+ *
+ * 拓扑（格子 ID、连线、cellTypeId 等）全部来自原版 NORMAL_MAP。
+ * 仅坐标 (x, y) 来自用户的 地图.csv，按格子类型 + 序号映射。
+ *
+ * 这样引擎、卡牌、角色数据全部使用原版 UIN 字符串 ID，不会断裂。
+ */
+import { NORMAL_MAP } from './board.js';
 import type { CellTypeName } from './enums.js';
-const SUBTYPE_MAP: Record<string, CellTypeName> = {'监狱':'Jail','地狱':'Inferno','赌场':'Casino','银行':'Bank','藏宝阁':'Treasure','法院':'Courthouse','市场':'Marketplace','垃圾场':'Junkyard','办公楼':'Office','工厂':'Plant','天界':'Astral'};
-function toCellType(sub: string): CellTypeName { if (SUBTYPE_MAP[sub]) return SUBTYPE_MAP[sub]; const base = sub.replace(/[0-9]+$/, ''); const m: Record<string, CellTypeName> = {'冒险':'Danger','赌博':'Risk','贿赂':'Bribe','警察':'Police','收入':'Income','厄运':'Misfortune','演讲':'Tribune'}; return m[base] || 'Income'; }
-const CELL_TYPE_ID: Record<CellTypeName,string> = {Income:'12167966293311076356',Bribe:'16204880409289649669',Police:'14458891128750972929',Misfortune:'12748367695283384070',Risk:'16271871453755922691',Danger:'14030686299553685508',Tribune:'17637869515721969922',Plant:'11749977052396124682',Jail:'14066516110727860493',Casino:'14360938936374734863',Bank:'11601921214659220744',Treasure:'11843989694623805201',Courthouse:'15443773171780652560',Marketplace:'13199010232511312140',Junkyard:'17877687295394095883',Office:'16143519963885831945',Inferno:'12771168267915490318',Astral:'11670037059498564103'};
-const CELL_TEXT: Record<string,{caption:string;description:string}> = {Income:{caption:'收入',description:'经过+收入，停留双倍'},Bribe:{caption:'贿赂',description:'支付贿赂金'},Police:{caption:'警察',description:'贿赂或掷骰'},Misfortune:{caption:'厄运',description:'抽厄运牌'},Risk:{caption:'赌博',description:'可选掷骰'},Danger:{caption:'冒险',description:'买保险+掷骰'},Tribune:{caption:'演讲',description:'下注赢选票'},Plant:{caption:'工厂',description:'+50金-1罪恶'},Jail:{caption:'监狱',description:'入狱/服刑'},Casino:{caption:'赌场',description:'掷骰赌博'},Bank:{caption:'银行',description:'投资10金+10收入'},Treasure:{caption:'藏宝阁',description:'自动掷骰'},Courthouse:{caption:'法院',description:'没收选票'},Marketplace:{caption:'市场',description:'卖齿轮'},Junkyard:{caption:'垃圾场',description:'掷骰获取'},Office:{caption:'办公楼',description:'卖选票'},Inferno:{caption:'地狱',description:'付100金抽1牌'},Astral:{caption:'天界',description:'电梯传送'}};
-interface NodeDef { id: string; subtype: string; x: number; y: number; }
-const NODES: NodeDef[] = [
-  { id: '1', subtype: '监狱', x: 59.3, y: 98.3 },
-  { id: '2', subtype: '冒险1', x: 67.5, y: 100 },
-  { id: '3', subtype: '赌博1', x: 75.4, y: 95.2 },
-  { id: '4', subtype: '贿赂1', x: 74, y: 85 },
-  { id: '5', subtype: '警察1', x: 66.1, y: 79.6 },
-  { id: '6', subtype: '冒险2', x: 72, y: 72.8 },
-  { id: '7', subtype: '收入1', x: 81.4, y: 75.9 },
-  { id: '8', subtype: '厄运1', x: 90.4, y: 76.9 },
-  { id: '9', subtype: '地狱', x: 100, y: 74.8 },
-  { id: '10', subtype: '赌博2', x: 94.6, y: 66 },
-  { id: '11', subtype: '厄运2', x: 86.2, y: 66 },
-  { id: '12', subtype: '警察2', x: 77.1, y: 64.3 },
-  { id: '13', subtype: '冒险3', x: 78.2, y: 53.7 },
-  { id: '14', subtype: '赌博3', x: 86.7, y: 51.4 },
-  { id: '15', subtype: '赌场', x: 94.6, y: 49.7 },
-  { id: '16', subtype: '演讲1', x: 86.7, y: 41.8 },
-  { id: '17', subtype: '警察3', x: 77.4, y: 43.9 },
-  { id: '18', subtype: '冒险4', x: 73.4, y: 36.1 },
-  { id: '19', subtype: '贿赂3', x: 81.1, y: 28.9 },
-  { id: '20', subtype: '法院', x: 85.6, y: 19 },
-  { id: '21', subtype: '演讲2', x: 75.4, y: 23.1 },
-  { id: '22', subtype: '警察4', x: 66.7, y: 28.9 },
-  { id: '23', subtype: '冒险5', x: 57.3, y: 27.9 },
-  { id: '24', subtype: '冒险6', x: 59.3, y: 18.4 },
-  { id: '25', subtype: '厄运3', x: 63, y: 10.2 },
-  { id: '26', subtype: '藏宝阁', x: 57.6, y: 1.7 },
-  { id: '27', subtype: '赌博4', x: 53.4, y: 10.9 },
-  { id: '28', subtype: '冒险7', x: 50.3, y: 19.7 },
-  { id: '29', subtype: '警察5', x: 48.9, y: 29.3 },
-  { id: '30', subtype: '贿赂4', x: 40.7, y: 33 },
-  { id: '31', subtype: '贿赂5', x: 42.4, y: 21.4 },
-  { id: '32', subtype: '贿赂6', x: 40.1, y: 10.5 },
-  { id: '33', subtype: '贿赂7', x: 31.6, y: 1.7 },
-  { id: '34', subtype: '贿赂8', x: 21.2, y: 0 },
-  { id: '35', subtype: '贿赂9', x: 12.4, y: 4.4 },
-  { id: '36', subtype: '天界', x: 3.4, y: 9.5 },
-  { id: '37', subtype: '收入2', x: 4.8, y: 22.1 },
-  { id: '38', subtype: '赌博5', x: 8.2, y: 32.3 },
-  { id: '39', subtype: '厄运4', x: 15.5, y: 40.1 },
-  { id: '40', subtype: '冒险8', x: 24.9, y: 43.2 },
-  { id: '41', subtype: '收入3', x: 33.3, y: 38.1 },
-  { id: '42', subtype: '警察6', x: 31.4, y: 28.6 },
-  { id: '43', subtype: '银行', x: 23.4, y: 21.8 },
-  { id: '44', subtype: '赌博6', x: 22.3, y: 32.7 },
-  { id: '45', subtype: '警察7', x: 17.8, y: 50 },
-  { id: '46', subtype: '赌博7', x: 9, y: 48.6 },
-  { id: '47', subtype: '办公楼', x: 0, y: 52.4 },
-  { id: '48', subtype: '演讲3', x: 8.8, y: 56.5 },
-  { id: '49', subtype: '冒险9', x: 16.4, y: 58.8 },
-  { id: '50', subtype: '警察8', x: 20.9, y: 67 },
-  { id: '51', subtype: '赌博8', x: 16.1, y: 75.5 },
-  { id: '52', subtype: '工厂', x: 11.3, y: 83 },
-  { id: '53', subtype: '演讲4', x: 21.2, y: 82.3 },
-  { id: '54', subtype: '冒险10', x: 26.8, y: 72.8 },
-  { id: '55', subtype: '警察9', x: 34.7, y: 74.8 },
-  { id: '56', subtype: '赌博9', x: 29.7, y: 83 },
-  { id: '57', subtype: '垃圾场', x: 29.7, y: 92.2 },
-  { id: '58', subtype: '演讲5', x: 39.3, y: 86.1 },
-  { id: '59', subtype: '冒险11', x: 42.1, y: 75.2 },
-  { id: '60', subtype: '警察10', x: 50.6, y: 75.2 },
-  { id: '61', subtype: '赌博10', x: 50.8, y: 66 },
-  { id: '62', subtype: '市场', x: 56.8, y: 57.5 },
-  { id: '63', subtype: '演讲6', x: 60.5, y: 67 },
-  { id: '64', subtype: '收入4', x: 58.2, y: 76.5 },
-  { id: '65', subtype: '贿赂2', x: 67.8, y: 50 },
-  { id: '66', subtype: '厄运5', x: 49.4, y: 49 },
-  { id: '67', subtype: '贿赂10', x: 31.4, y: 57.8 },
+
+/** 用户 CSV 的 subtype → CellTypeName */
+function toCellType(sub: string): CellTypeName {
+  const direct: Record<string, CellTypeName> = {
+    '监狱':'Jail','地狱':'Inferno','赌场':'Casino','银行':'Bank',
+    '藏宝阁':'Treasure','法院':'Courthouse','市场':'Marketplace',
+    '垃圾场':'Junkyard','办公楼':'Office','工厂':'Plant','天界':'Astral',
+  };
+  if (direct[sub]) return direct[sub];
+  const base = sub.replace(/[0-9]+$/, '');
+  const m: Record<string, CellTypeName> = {
+    '冒险':'Danger','赌博':'Risk','贿赂':'Bribe','警察':'Police',
+    '收入':'Income','厄运':'Misfortune','演讲':'Tribune',
+  };
+  return m[base] || 'Income';
+}
+
+/** 用户 CSV 节点 */
+interface UserNode { id: string; subtype: string; x: number; y: number; }
+
+const USER_NODES: UserNode[] = [
+  { id:'1', subtype:'监狱', x:290, y:323 },
+  { id:'2', subtype:'冒险1', x:319, y:328 },
+  { id:'3', subtype:'赌博1', x:347, y:314 },
+  { id:'4', subtype:'贿赂1', x:342, y:284 },
+  { id:'5', subtype:'警察1', x:314, y:268 },
+  { id:'6', subtype:'冒险2', x:335, y:248 },
+  { id:'7', subtype:'收入1', x:368, y:257 },
+  { id:'8', subtype:'厄运1', x:400, y:260 },
+  { id:'9', subtype:'地狱', x:434, y:254 },
+  { id:'10', subtype:'赌博2', x:415, y:228 },
+  { id:'11', subtype:'厄运2', x:385, y:228 },
+  { id:'12', subtype:'警察2', x:353, y:223 },
+  { id:'13', subtype:'冒险3', x:357, y:192 },
+  { id:'14', subtype:'赌博3', x:387, y:185 },
+  { id:'15', subtype:'赌场', x:415, y:180 },
+  { id:'16', subtype:'演讲1', x:387, y:157 },
+  { id:'17', subtype:'警察3', x:354, y:163 },
+  { id:'18', subtype:'冒险4', x:340, y:140 },
+  { id:'19', subtype:'贿赂3', x:367, y:119 },
+  { id:'20', subtype:'法院', x:383, y:90 },
+  { id:'21', subtype:'演讲2', x:347, y:102 },
+  { id:'22', subtype:'警察4', x:316, y:119 },
+  { id:'23', subtype:'冒险5', x:283, y:116 },
+  { id:'24', subtype:'冒险6', x:290, y:88 },
+  { id:'25', subtype:'厄运3', x:303, y:64 },
+  { id:'26', subtype:'藏宝阁', x:284, y:39 },
+  { id:'27', subtype:'赌博4', x:269, y:66 },
+  { id:'28', subtype:'冒险7', x:258, y:92 },
+  { id:'29', subtype:'警察5', x:253, y:120 },
+  { id:'30', subtype:'贿赂4', x:224, y:131 },
+  { id:'31', subtype:'贿赂5', x:230, y:97 },
+  { id:'32', subtype:'贿赂6', x:222, y:65 },
+  { id:'33', subtype:'贿赂7', x:192, y:39 },
+  { id:'34', subtype:'贿赂8', x:155, y:34 },
+  { id:'35', subtype:'贿赂9', x:124, y:47 },
+  { id:'36', subtype:'天界', x:92, y:62 },
+  { id:'37', subtype:'收入2', x:97, y:99 },
+  { id:'38', subtype:'赌博5', x:109, y:129 },
+  { id:'39', subtype:'厄运4', x:135, y:152 },
+  { id:'40', subtype:'冒险8', x:168, y:161 },
+  { id:'41', subtype:'收入3', x:198, y:146 },
+  { id:'42', subtype:'警察6', x:191, y:118 },
+  { id:'43', subtype:'银行', x:159, y:130 },
+  { id:'44', subtype:'赌博6', x:159, y:130 },
+  { id:'45', subtype:'警察7', x:143, y:181 },
+  { id:'46', subtype:'赌博7', x:112, y:177 },
+  { id:'47', subtype:'办公楼', x:80, y:188 },
+  { id:'48', subtype:'演讲3', x:111, y:200 },
+  { id:'49', subtype:'冒险9', x:138, y:207 },
+  { id:'50', subtype:'警察8', x:154, y:231 },
+  { id:'51', subtype:'赌博8', x:137, y:256 },
+  { id:'52', subtype:'工厂', x:120, y:278 },
+  { id:'53', subtype:'演讲4', x:155, y:276 },
+  { id:'54', subtype:'冒险10', x:175, y:248 },
+  { id:'55', subtype:'警察9', x:203, y:254 },
+  { id:'56', subtype:'赌博9', x:185, y:278 },
+  { id:'57', subtype:'垃圾场', x:185, y:305 },
+  { id:'58', subtype:'演讲5', x:219, y:287 },
+  { id:'59', subtype:'冒险11', x:229, y:255 },
+  { id:'60', subtype:'警察10', x:259, y:255 },
+  { id:'61', subtype:'赌博10', x:260, y:228 },
+  { id:'62', subtype:'市场', x:281, y:203 },
+  { id:'63', subtype:'演讲6', x:294, y:231 },
+  { id:'64', subtype:'收入4', x:286, y:259 },
+  { id:'65', subtype:'贿赂2', x:320, y:181 },
+  { id:'66', subtype:'厄运5', x:255, y:178 },
+  { id:'67', subtype:'贿赂10', x:191, y:204 },
 ];
-const EDGES: Array<[string,string]> = [
-  ['1','2'],
-  ['2','3'],
-  ['3','4'],
-  ['4','5'],
-  ['5','6'],
-  ['6','7'],
-  ['7','8'],
-  ['8','9'],
-  ['9','10'],
-  ['10','11'],
-  ['11','12'],
-  ['6','12'],
-  ['12','13'],
-  ['13','14'],
-  ['14','15'],
-  ['15','16'],
-  ['16','17'],
-  ['13','17'],
-  ['18','22'],
-  ['23','65'],
-  ['65','23'],
-  ['6','65'],
-  ['65','6'],
-  ['65','17'],
-  ['17','65'],
-  ['17','18'],
-  ['18','19'],
-  ['19','20'],
-  ['20','21'],
-  ['21','22'],
-  ['22','23'],
-  ['23','24'],
-  ['24','25'],
-  ['25','26'],
-  ['26','27'],
-  ['27','28'],
-  ['28','29'],
-  ['23','29'],
-  ['29','30'],
-  ['30','31'],
-  ['31','32'],
-  ['32','33'],
-  ['33','34'],
-  ['34','35'],
-  ['35','36'],
-  ['36','37'],
-  ['37','38'],
-  ['38','39'],
-  ['39','40'],
-  ['30','41'],
-  ['41','40'],
-  ['41','42'],
-  ['42','43'],
-  ['43','44'],
-  ['44','40'],
-  ['40','45'],
-  ['45','46'],
-  ['46','47'],
-  ['47','48'],
-  ['48','49'],
-  ['49','50'],
-  ['50','51'],
-  ['51','52'],
-  ['52','53'],
-  ['53','54'],
-  ['54','55'],
-  ['55','56'],
-  ['56','57'],
-  ['57','58'],
-  ['58','59'],
-  ['45','49'],
-  ['50','54'],
-  ['55','59'],
-  ['40','67'],
-  ['67','40'],
-  ['67','59'],
-  ['59','67'],
-  ['65','66'],
-  ['66','65'],
-  ['66','67'],
-  ['67','66'],
-  ['67','50'],
-  ['50','67'],
-  ['59','60'],
-  ['60','64'],
-  ['64','5'],
-  ['60','61'],
-  ['61','62'],
-  ['62','63'],
-  ['63','64'],
-];
-function buildCustomMap(): BoardMap { const outMap=new Map<string,string[]>();const inMap=new Map<string,string[]>();for(const id of NODES.map(n=>n.id)){outMap.set(id,[]);inMap.set(id,[]);}for(const [from,to] of EDGES){outMap.get(from)?.push(to);inMap.get(to)?.push(from);}const cells:BoardCell[]=NODES.map((node,i)=>{const cellType=toCellType(node.subtype);const text=CELL_TEXT[cellType]??{caption:node.subtype,description:''};return{key:'C'+node.id,id:node.id,cellType,name:'Cell'+node.id+'.'+cellType,num:i+1,out:outMap.get(node.id)??[],in:inMap.get(node.id)??[],cellTypeId:CELL_TYPE_ID[cellType]??'',soundId:'',soundVolume:100,caption:text.caption,description:text.description,flavorText:'',text:{caption:text.caption,description:text.description}};});return{id:'custom-67',name:'Normal',cells};}
-export const CUSTOM_MAP: BoardMap = buildCustomMap();
-export const CUSTOM_POS: Record<string,{x:number;y:number}> = Object.fromEntries(NODES.map(n=>[n.id,{x:n.x,y:n.y}]));
+
+/** 构建原版 cell ID → 用户坐标 的映射 */
+function buildCustomPos(): Record<string, { x: number; y: number }> {
+  const origByType = new Map<string, typeof NORMAL_MAP.cells>();
+  for (const c of NORMAL_MAP.cells) {
+    if (!origByType.has(c.cellType)) origByType.set(c.cellType, []);
+    origByType.get(c.cellType)!.push(c);
+  }
+  for (const [, arr] of origByType) arr.sort((a, b) => a.num - b.num);
+
+  const userByType = new Map<string, UserNode[]>();
+  for (const n of USER_NODES) {
+    const t = toCellType(n.subtype);
+    if (!userByType.has(t)) userByType.set(t, []);
+    userByType.get(t)!.push(n);
+  }
+
+  const xs = USER_NODES.map(n => n.x);
+  const ys = USER_NODES.map(n => n.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const rX = maxX - minX || 1, rY = maxY - minY || 1;
+
+  const result: Record<string, { x: number; y: number }> = {};
+  for (const [type, userArr] of userByType) {
+    const origArr = origByType.get(type) || [];
+    for (let i = 0; i < userArr.length; i++) {
+      const origCell = origArr[i] ?? origArr[0];
+      if (!origCell) continue;
+      const n = userArr[i];
+      result[origCell.id] = {
+        x: +(((n.x - minX) / rX) * 100).toFixed(1),
+        y: +(((n.y - minY) / rY) * 100).toFixed(1),
+      };
+    }
+  }
+  return result;
+}
+
+/** 原版棋盘拓扑（不变） */
+export const CUSTOM_MAP = NORMAL_MAP;
+
+/** 原版 cell ID → 用户坐标 (0-100) */
+export const CUSTOM_POS: Record<string, { x: number; y: number }> = buildCustomPos();

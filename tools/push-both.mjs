@@ -51,8 +51,11 @@ for (const r of REMOTES) {
   const url = r.auth
     ? r.url.replace('https://', `https://${r.auth}@`)
     : r.url;
-  const args = ['push'];
+  // ⚠️ `-c` 是 **git 的全局选项，必须放在子命令之前**
+  // （`git -c x=y push ...`，写成 `git push -c x=y` 会报 "unknown switch `c'"）
+  const args = [];
   if (r.helper) args.push('-c', `credential.helper=${r.helper}`);
+  args.push('push');
   args.push(url, `HEAD:${r.branch}`, '--force');
   if (DRY) args.push('--dry-run');
 

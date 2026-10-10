@@ -264,20 +264,21 @@ check('用真实卡牌走到对手所在非建筑站 → 触发交锋', () => {
 });
 
 /**
- * ⚠️ 已知缺陷（记录用，不是期望行为）。
+ * ✅ 已修复的缺陷（保留为回归用例）。
  *
- * `resolveLanding` 里 Danger 与 Police 会**提前 return**（挂起买保险 / 付贿赂），
+ * 原来 `resolveLanding` 里 Danger 与 Police 会**提前 return**（挂起买保险 / 付贿赂），
  * 而"两位玩家同格则交锋"的检查排在函数**末尾**，于是这两类格子上
  * 交锋永远不会触发。
  *
  * 原文（游戏内说明）是：「当两位玩家停留在同一站点时，就会引发玩家交锋
  * （建筑除外）」——没有排除 Danger / Police。
  *
- * 修法应当是"挂起交互结束后再补做交锋检查"。本用例先把这个事实钉住，
- * 避免它被当成"已经支持"而无人察觉。等修好后把 `assert.equal` 改成
- * `assert.ok(st.pending.kind.startsWith('conflict:'))`。
+ * 修法：格子效果**先行**（它是"停在该格"的即时结算），
+ * 交锋留到格子交互结束后再补判（见 `doneWithConflict`）。
+ * 顺序选"先格子后交锋"，是因为交锋挂起被应答后引擎不会回到 `resolveLanding`，
+ * 若先交锋会把格子效果**静默丢掉**（实测确认）。
  */
-check('【已知缺陷】停在对手所在的 Danger/Police 格时不触发交锋', () => {
+check('停在对手所在的 Danger/Police 格：先挂格子交互，之后触发交锋', () => {
   const st = game(4242);
   const a = getPlayer(st, 'p0')!;
   const b = getPlayer(st, 'p1')!;
@@ -304,11 +305,24 @@ check('【已知缺陷】停在对手所在的 Danger/Police 格时不触发交�
   assert.ok(r.ok, `移动应成功：${r.error}`);
 
   const destCell = getMap(st).cells.find((c) => c.id === pick!.dest)!;
-  // 当前实现：挂起的是格子交互，不是交锋
+  // 1) 先挂格子交互（买保险 / 付贿赂）
   assert.ok(st.pending, '应挂起格子交互');
   assert.equal(st.pending!.kind.startsWith('conflict:'), false,
-    `当前不应触发交锋（这正是缺陷），实际 ${st.pending!.kind}`);
-  console.log(`      ${destCell.cellType} 格 → 挂起 ${st.pending!.kind}（未触发交锋，已知缺陷）`);
+    `第一步应是格子交互，实际 ${st.pending!.kind}`);
+  console.log(`      ${destCell.cellType} 格 → 先挂起 ${st.pending!.kind}`);
+
+  // 2) 应答格子交互后，应当补上交锋
+  let guard = 0;
+  while (st.pending && !st.pending.kind.startsWith('conflict:') && guard++ < 10) {
+    const pd = st.pending;
+    const ans = pd.options.slice(0, Math.max(1, pd.min ?? 1)).map((o) => o.value);
+    const rr = resolvePending(st, pd.playerId, ans);
+    st.pending = rr.pending;
+  }
+  assert.ok(st.pending, '应交接到交锋挂起');
+  assert.ok(st.pending!.kind.startsWith('conflict:'),
+    `格子交互结束后应触发交锋，实际 ${st.pending!.kind}`);
+  console.log(`      格子交互结束 → ${st.pending!.kind}（交锋已触发）`);
 });
 check('走到对手所在的**建筑**格不触发交锋', () => {  const st = game(4242);
   const a = getPlayer(st, 'p0')!;

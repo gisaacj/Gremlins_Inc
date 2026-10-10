@@ -11,7 +11,7 @@ import type {
 import type { EngineState, EnginePlayer } from './model.js';
 import { CHAOS_CARDS, cellLabel, getCell, getMap } from './model.js';
 import { availableOptions } from './options.js';
-import { chaosOptions } from './api.js';
+import { chaosOptions, playableCards } from './api.js';
 
 /** 引擎回合阶段 → 协议字符串（客户端主要用 prompt，这里只作展示与调试） */
 function phaseOf(state: EngineState): string {
@@ -153,12 +153,13 @@ export function buildEnginePrompt(
 
   // 已移动到达：可选打牌或跳过（跳过=自动换人）
   if (current.movedThisTurn && !inJail) {
+    const playable = playableCards(state, viewerId);
     return {
       type: 'play_card_or_skip',
       message: optional.length
         ? `到达「${place}」：可打牌/执行动作，或跳过`
         : `到达「${place}」：可打牌，或跳过`,
-      options: current.hand,
+      options: playable,
       optionalActions: optional.map((o) => ({
         id: o.id,
         label: o.label,

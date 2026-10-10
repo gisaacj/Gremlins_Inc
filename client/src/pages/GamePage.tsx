@@ -48,9 +48,11 @@ export function GamePage() {
   const chaosEnabled = game.riotCardsEnabled !== false;
 
   const playableCardIds = new Set(
-    prompt?.type === 'select_move_card' || prompt?.type === 'play_card_or_skip'
+    prompt?.type === 'select_move_card'
       ? (prompt.options ?? [])
-      : [],
+      : prompt?.type === 'play_card_or_skip'
+        ? (prompt.options ?? [])
+        : [],
   );
 
   return (
@@ -255,11 +257,11 @@ export function GamePage() {
       {/* 手牌 */}
       <div className="hand">
         {myHand.map((cardId) => {
-          const playable = isMyTurn && (playableCardIds.size === 0 || playableCardIds.has(cardId));
+          const playable = isMyTurn && playableCardIds.has(cardId);
           const isSelected = selectedCardId === cardId;
           const isMovePhase = prompt?.type === 'select_move_card';
           const isPlayPhase = prompt?.type === 'play_card_or_skip';
-          // 移动后：手牌中可在当前格打出的牌高亮
+          // 移动后：只有能在当前格打出（类型匹配+付得起）的牌才高亮
           const highlight = isPlayPhase && playable;
           return (
             <Card

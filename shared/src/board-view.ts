@@ -205,9 +205,27 @@ export function isDiscardMoveCard(cardId: string): boolean {
   return c.actions?.some((a: any) => a.type === 'Discard' && a.params?.[0] === 'Move') ?? false;
 }
 
-/** 中央厄运格 id */
-export function centralMisfortuneId(_map: BoardMap): string | undefined {
-  return BOARD_VIEW.tiles.find((t) => t.cellType === 'Misfortune' && t.out.length + t.in.length >= 4)?.id;
+/**
+ * 中央厄运格 id（「特务·摇尾巴」传送的目标）。
+ *
+ * 判据：**连接度最高的厄运格**（出入度之和）。
+ * 原版地图没有"中心"标记，但每张图上恰好都有一个度数明显更高的厄运格
+ * （Normal/自定义 是 2+2，其余 1+1；Colony 是 2+3）。
+ *
+ * ⚠️ 必须从**传入的 map** 取，不能用模块级的 `BOARD_VIEW`——
+ * 后者只装了当前这一张棋盘，对别的地图会返回不属于它的格 id。
+ */
+export function centralMisfortuneId(map: BoardMap): string | undefined {
+  const ms = map.cells.filter((c) => c.cellType === 'Misfortune');
+  if (!ms.length) return undefined;
+  return ms
+    .slice()
+    .sort((a, b) => {
+      const da = a.out.length + a.in.length;
+      const db = b.out.length + b.in.length;
+      if (db !== da) return db - da;
+      return (b.num ?? 0) - (a.num ?? 0);
+    })[0].id;
 }
 
 /** 是否为反向移动牌 */

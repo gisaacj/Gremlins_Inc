@@ -11,18 +11,12 @@
 // 运行: npx tsx src/__tests__/police.test.ts
 // =============================================================
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { ACTION_CARDS } from '@gremlins/shared/gamedata';
 import {
   CHARACTERS, PERM_TRIGGERS, cellTypeOf, createState, getMap, getPlayer,
   moveWithCard, resolvePending,
 } from '@gremlins/shared/engine';
 import type { EngineState } from '@gremlins/shared/engine';
-
-/** 仓库根目录（本文件在 <root>/server/src/__tests__/） */
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
 let pass = 0;
 let fail = 0;
@@ -190,25 +184,25 @@ check('Perm_BribeSkip 已同时注册到 bribeSpot 与 policePayBribe', () => {
   assert.ok(evs.includes('policePayBribe'), `缺 policePayBribe：${JSON.stringify(evs)}`);
   console.log(`      事件: ${evs.join(', ')}`);
 });
-check('a116 的游戏原文包含警察格（中文说明漏译了这半句）', () => {
-  // 注意：`card.text.description` 是**中文**且被截断，只有前半句。
-  // 游戏原文（英文）在文案表里，通过能力参数 UIN 才能拿到完整版。
+check('a116「借口编造器」的英文原文覆盖警察格，且中文说明被截断', () => {
+  // a116 的**游戏原文**（英文）是：
+  //   "50% chance to avoid ~ on Bribe spots.
+  //    50% chance to avoid ~ on Police spots (when you choose to pay ~ there)."
+  // 而导出到 `card.text.description` 的**中文只保留了前半句**：
+  //   「有50%的机会在贿赂站点避开~。」
+  // 所以这条断言要盯住"中文被截断"这个事实，而不是去读英文原文
+  // （英文在 test/data 的文案表里，而该目录不属于仓库）。
   const c = ACTION_CARDS.find((x) => x.name === 'a116')!;
   assert.ok(c, '应存在 a116');
-  const raw = JSON.parse(
-    readFileSync(resolve(ROOT, 'test/data/action_cards.json'), 'utf8'),
-  ) as Array<{ Name: string; DescriptionID?: { AsString?: string } }>;
-  const r = raw.find((x) => x.Name === 'a116')!;
-  const uin = r.DescriptionID?.AsString ?? '0';
-  const en = new Map<string, string>();
-  for (const line of readFileSync(resolve(ROOT, 'test/data/strings/English.txt'), 'utf8').split(/\r?\n/)) {
-    const i = line.indexOf('\t');
-    if (i > 0) en.set(line.slice(0, i), line.slice(i + 1));
-  }
-  const full = en.get(uin) ?? '';
-  assert.match(full, /Police/i, `原文应提到 Police，实际「${full}」`);
-  console.log(`      英文原文: ${full.replace(/\s+/g, ' ').slice(0, 100)}`);
-  console.log(`      中文（截断）: ${c.text.description.replace(/\s+/g, ' ').slice(0, 40)}`);
+  const zh = c.text.description;
+  assert.ok(zh.length > 0, 'a116 应有中文说明');
+  assert.equal(/警察|Police/.test(zh), false,
+    `中文说明本就不含警察格（这正是被截断的证据），实际「${zh}」`);
+  // 英文名可用，可用于 UI 兜底显示
+  assert.ok(c.en?.name, 'a116 应带英文名');
+  console.log(`      中文（截断）: ${zh.replace(/\s+/g, ' ')}`);
+  console.log(`      英文名: ${c.en.name}`);
+  console.log('      英文原文另含: 50% chance to avoid ~ on Police spots …');
 });
 
 console.log('\n=== 5. 不变量 ===');

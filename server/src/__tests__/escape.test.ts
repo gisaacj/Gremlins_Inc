@@ -48,12 +48,14 @@ function answer(st: EngineState, value: string): void {
 
 console.log('=== 1. 中心厄运站点的判定 ===');
 check('两张地图都能定位到唯一的"中心厄运站"', () => {
-  for (const [id, map] of Object.entries(BOARD_MAPS)) {
+  // BOARD_MAPS 是 BoardMap[]（按索引取键会得到 '0'/'1'，不是地图对象）
+  for (const map of BOARD_MAPS) {
     const dest = centralMisfortuneId(map);
-    assert.ok(dest, `${map.name} 应能定位中心厄运站`);
+    assert.ok(dest, `map ${map.id} 应能定位中心厄运站`);
     const cell = map.cells.find((c) => c.id === dest)!;
-    assert.equal(cell.cellType, 'Misfortune', `${map.name} 应为厄运格，实际 ${cell.cellType}`);
-    console.log(`      ${map.name}: ${dest.slice(-6)}（出度 ${cell.out.length}/入度 ${cell.in.length}）`);
+    assert.ok(cell, `map ${map.id} 的目标格应存在`);
+    assert.equal(cell.cellType, 'Misfortune', `map ${map.id} 应为厄运格，实际 ${cell.cellType}`);
+    console.log(`      ${map.name}(id=${map.id}): ${dest}（出度 ${cell.out.length}/入度 ${cell.in.length}）`);
   }
 });
 check('引擎侧的 centralMisfortuneId 与顶层一致', () => {

@@ -1108,6 +1108,10 @@ export function takeJailTurn(state: EngineState, playerId: string): { ok: boolea
     }
   }
 
+  // 原版规则：服刑 = 一回合一次，结束后自动换人
+  // 监狱中不补牌（!p.inJail 检查），但正常结束回合让其他玩家行动
+  endTurn(state);
+
   return { ok: true };
 }
 

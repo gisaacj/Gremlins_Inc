@@ -73,11 +73,10 @@ export class AIPlayer {
       const me = getPlayer(state, playerId);
       if (!me) break;
 
-      // 狱中：服刑
+      // 狱中：服刑（takeJailTurn 内部自动 endTurn 换人）
       if (me.inJail) {
         const r = jailTurn(state, playerId);
         log.push({ playerId, action: 'jail', detail: r.ok ? undefined : r.error });
-        this.endTurn(state, playerId);
         n++;
         break;
       }

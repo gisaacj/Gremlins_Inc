@@ -47,6 +47,11 @@ export function serializeEngineState(state: EngineState, viewerId?: string): Ser
     discard: state.discard.slice(-60),
     misfortuneDeckCount: state.misfortuneDeck.length,
     lastDiceRoll: state.lastRoll,
+    // 只把「被查看的手牌」发给**查看者本人** —— 别人不该看到
+    revealedHand:
+      state.revealedHand && viewerId === state.revealedHand.viewerId
+        ? state.revealedHand
+        : undefined,
     riotCardsEnabled: state.chaosEnabled,
     // 混沌卡共享池：附带"该视角玩家能否打出"的判定，客户端直接渲染。
     // viewerId 缺省时不判定（全部按不可打处理），避免误报可打。

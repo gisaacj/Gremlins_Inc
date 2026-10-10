@@ -247,6 +247,25 @@ export interface EngineState {
   /** 最近一次掷骰结果 */
   lastRoll?: number;
   /**
+   * 最近一次「被查看的手牌」—— 供界面展示。
+   *
+   * a043「搜身」/a046「清剿行动」/a048「视察」/a049「调查」/a151「告密者」
+   * 这类牌的效果是"查看对方手牌"，但引擎原先**只写了一条日志**，
+   * 玩家在界面上根本看不到对方的牌（用户报的 bug #4）。
+   *
+   * 用"最近一次"而不是累积列表：查看是一次性动作，展示完就可以被下一次覆盖。
+   */
+  revealedHand?: {
+    /** 被查看的玩家 */
+    ownerId: string;
+    /** 被查看的玩家名（便于界面直接显示） */
+    ownerName: string;
+    /** 查看了谁的玩家 */
+    viewerId: string;
+    /** 手牌 id 列表 */
+    cardIds: string[];
+  };
+  /**
    * "欠着"的格子效果。
    *
    * 落地顺序是**先交锋、后格子效果**（依据 `TAG.Game_Label_Conflict_Description`：

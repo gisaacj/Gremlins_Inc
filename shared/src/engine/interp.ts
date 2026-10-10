@@ -734,6 +734,17 @@ function execAction(
       const o = owner(state, ctx);
       for (const tgt of targetPlayers(state, ctx)) {
         log(state, o.id, `查看了 ${nameOf(tgt)} 的手牌`);
+        // 把被查看的手牌记下来，界面才能真的显示出来。
+        // ⚠️ 原先只写日志，玩家看不到对方的牌（用户 bug #4）。
+        // 自己的手牌（SelectSelf + 揭示类卡）不必记 —— 本来就看得见。
+        if (tgt.id !== o.id) {
+          state.revealedHand = {
+            ownerId: tgt.id,
+            ownerName: nameOf(tgt),
+            viewerId: o.id,
+            cardIds: [...tgt.hand],
+          };
+        }
         if (tags.includes('SecretPay')) {
           const n = tgt.hand.filter((id) => {
             const c = CARD_BY_ID[id];

@@ -277,3 +277,32 @@
     display: none;
   }
 }
+
+/* ── 被查看的对方手牌（a043 搜身 / a046 清剿行动 / a151 告密者 等） ──
+   原版这些牌的效果就是"查看对方手牌"，但引擎原先只写日志、
+   界面看不到（用户 bug #4）。现在由 state.revealedHand 提供。 */
+.revealed-hand {
+  margin: 6px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border, #444);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.revealed-hand-title {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.revealed-hand-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.revealed-hand-card {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  white-space: nowrap;
+}

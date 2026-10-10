@@ -144,6 +144,18 @@ export interface SerializedGameState {
   /** 厄运牌堆剩余张数 */
   misfortuneDeckCount: number;
   lastDiceRoll?: number;
+  /**
+   * 最近一次「被查看的手牌」（a043 搜身 / a046 清剿行动 / a151 告密者 …）。
+   *
+   * 原版这些牌的效果是"查看对方手牌"，但引擎原先只写日志、界面看不到，
+   * 用户报的 bug #4。只有**查看者本人**会收到这个字段。
+   */
+  revealedHand?: {
+    ownerId: string;
+    ownerName: string;
+    viewerId: string;
+    cardIds: string[];
+  };
   riotCardsEnabled: boolean;
   /**
    * 混沌卡（暴乱卡）**共享池**——还没被打出的卡。

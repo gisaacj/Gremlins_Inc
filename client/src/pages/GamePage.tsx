@@ -3,7 +3,7 @@ import { useGameStore } from '../store/game.js';
 import { BoardView } from '../components/BoardView.js';
 import { ResourcePanel, PlayerList, LogBox, PermanentPanel } from '../components/Hud.js';
 import { Card, CardDetail } from '../components/Card.js';
-import { CARD_BY_ID, CHAOS_CARDS } from '@gremlins/shared';
+import { CARD_BY_ID, CHAOS_CARDS, displayCardRules } from '@gremlins/shared';
 import type { ActionCard } from '@gremlins/shared';
 import '../styles/game.css';
 import '../styles/cards.css';
@@ -236,6 +236,26 @@ export function GamePage() {
                   {!prompt.choices?.length && !prompt.numeric && (
                     <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>无可用选项</span>
                   )}
+                </div>
+              )}
+
+              {/* 被查看的对方手牌（a043 搜身 / a046 清剿行动 / a151 告密者…） */}
+              {game.revealedHand && (
+                <div className="revealed-hand">
+                  <div className="revealed-hand-title">
+                    🔍 {game.revealedHand.ownerName} 的手牌
+                    （{game.revealedHand.cardIds.length} 张）
+                  </div>
+                  <div className="revealed-hand-cards">
+                    {game.revealedHand.cardIds.map((id) => (
+                      <span key={id} className="revealed-hand-card" title={CARD_BY_ID[id]?.text.name ?? id}>
+                        {CARD_BY_ID[id] ? displayCardRules(CARD_BY_ID[id] as ActionCard).slice(0, 18) : id}
+                      </span>
+                    ))}
+                    {game.revealedHand.cardIds.length === 0 && (
+                      <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>（没有手牌）</span>
+                    )}
+                  </div>
                 </div>
               )}
 

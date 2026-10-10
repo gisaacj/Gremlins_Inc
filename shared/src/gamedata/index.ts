@@ -10,3 +10,4 @@ export * from './characters.js';
 export * from './decks.js';
 export * from './strings.js';
 export * from './text.js';
+export * from './custom-board.js';

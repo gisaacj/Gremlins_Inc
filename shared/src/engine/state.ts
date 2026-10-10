@@ -11,7 +11,7 @@ import type {
 import {
   ACTION_CARDS, CARD_BY_ID, CELL_TYPES, CELL_TYPE_BY_ID, CHARACTERS, CHARACTER_BY_ID,
   CHAOS_CARDS, CELL_TYPE_BY_NAME, GAME_CONST, JAIL_CARDS, MISFORTUNE_CARDS,
-  NORMAL_MAP, cellLabel, cellTypeOf, characterName, getCell, getMap, getPlayer,
+  CUSTOM_MAP, cellLabel, cellTypeOf, characterName, getCell, getMap, getPlayer,
 } from './model.js';
 import {
   ELECTION_INTERVAL, arrest, discardFromHand, drawMisfortune, drawTo, random, release,
@@ -100,7 +100,7 @@ function buildPlayer(
 
 /** 建立初始对局 */
 export function createState(args: EngineInitArgs): EngineState {
-  const mapId = NORMAL_MAP.id;
+  const mapId = CUSTOM_MAP.id;
   const seed = args.seed ?? (Date.now() & 0xffffffff);
 
   // 主牌堆 = 行动卡按 DeckCount 展开。

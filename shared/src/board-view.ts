@@ -1,51 +1,33 @@
 // =============================================================
 // 棋盘运行时视图 —— UI 消费的棋盘形态
 //
-// 数据来源：原作 GMap（真实拓扑）+ 计算出的布局坐标。
-// 与旧的 shared/src/data/board.ts 的区别：
-//   旧：手写的数字 id 近似图（"基于 地图.txt 重新生成"）
-//   新：原作 67/64 格真实邻接关系 + 拓扑算出的坐标
-//
-// 格 id 是字符串（原版 UIN），不再是 0..200 的自增下标。
+// 数据来源：用户提供的 30 节点坐标 + 连线规则。
+// 坐标已设计好不交叉，无需网格布局或交叉消除算法。
 // =============================================================
-import type { BoardCell, BoardMap, BoardLayout, CellTypeName } from './gamedata/index.js';
-// 注意：必须从 `./gamedata/index.js` 直接取。
-// 顶层 `@gremlins/shared` 的 `CARD_BY_ID` / `BOARD_MAPS` 等名字被
-// `./data/index.js`（基于 OCR 的历史数据）遮蔽，拿到的是错误数据。
+import type { BoardCell, BoardMap, CellTypeName } from './gamedata/index.js';
 import {
-  BOARD_MAPS, CARD_BY_ID, CELL_TYPE_BY_ID, LAYOUT_BY_MAP_NAME, NORMAL_MAP, EMPTY_LAYOUT,
+  CELL_TYPE_BY_ID, CUSTOM_MAP, CUSTOM_POS,
 } from './gamedata/index.js';
 
-// 棋盘相关的原版类型一并 re-export，客户端不必再单独引 gamedata 子路径
-export type { BoardCell, BoardMap, BoardLayout, CellTypeName } from './gamedata/index.js';
+// 棋盘相关的原版类型一并 re-export
+export type { BoardCell, BoardMap, CellTypeName } from './gamedata/index.js';
 
 /** UI 用的格子分类 */
 export type TileKind = 'building' | 'station' | 'jail';
 
 /** UI 用的单格 */
 export interface BoardTile {
-  /** 格 id（原版 UIN 字符串） */
   id: string;
-  /** 原版格号（1 起，用于展示与排序） */
   num: number;
-  /** 原版格子类型名，如 Bank / Risk */
   cellType: CellTypeName;
-  /** UI 分类 */
   kind: TileKind;
-  /** 是否为建筑（来自 GCellType.BuildingFlag） */
   isBuilding: boolean;
-  /** 中文名 */
   label: string;
-  /** 中文说明 */
   description: string;
-  /** 百分比坐标 */
   x: number;
   y: number;
-  /** 出边（可达格 id），长度 > 1 表示岔路口 */
   out: string[];
-  /** 入边 */
   in: string[];
-  /** 原始格对象，供引擎/调试使用 */
   cell: BoardCell;
 }
 
@@ -61,14 +43,10 @@ export interface BoardViewData {
   mapName: string;
   tiles: BoardTile[];
   edges: BoardEdge[];
-  /** 岔路口格 id */
   junctions: string[];
-  /** 监狱格 id（出生/入狱点） */
   jailTileId: string;
   byId: Map<string, BoardTile>;
-  /** 预计算的边弯曲偏移（避免交叉/压住节点） */
   bends: Map<string, { dx: number; dy: number }>;
-  /** 网格大小（围棋盘式：GRID_SIZE × GRID_SIZE 条线） */
   gridSize: number;
 }
 
@@ -81,11 +59,12 @@ function classify(cell: BoardCell): { kind: TileKind; isBuilding: boolean } {
   return { kind: isBuilding ? 'building' : 'station', isBuilding };
 }
 
-/** 由地图 + 布局构造 UI 视图 */
-export function buildBoardView(map: BoardMap, layout: BoardLayout): BoardViewData {
+/** 由自定义棋盘构造 UI 视图 */
+function buildBoardView(): BoardViewData {
+  const map = CUSTOM_MAP;
   const tiles: BoardTile[] = map.cells.map((cell) => {
     const { kind, isBuilding } = classify(cell);
-    const p = layout.pos[cell.id] ?? { x: 50, y: 50 };
+    const p = CUSTOM_POS[cell.id] ?? { x: 50, y: 50 };
     return {
       id: cell.id,
       num: cell.num,
@@ -102,288 +81,32 @@ export function buildBoardView(map: BoardMap, layout: BoardLayout): BoardViewDat
     };
   });
 
-  // 调整坐标
-  adjustPositions(tiles, layout.spine);
-
-  // 消除边交叉
-  resolveCrossings(tiles);
-
   const edges: BoardEdge[] = [];
   for (const t of tiles) for (const to of t.out) edges.push({ from: t.id, to });
 
   const jail = tiles.find((t) => t.cellType === 'Jail');
+  const junctions = tiles.filter((t) => t.out.length > 1).map((t) => t.id);
 
-  const view: BoardViewData = {
+  return {
     mapId: map.id,
     mapName: map.name,
     tiles,
     edges,
-    junctions: layout.junctions,
+    junctions,
     jailTileId: jail?.id ?? tiles[0]?.id ?? '',
     byId: new Map(tiles.map((t) => [t.id, t])),
     bends: new Map(),
-    gridSize: GRID_SIZE,
-  };
-
-  computeEdgeBends(view);
-  return view;
-}
-
-/**
- * 围棋盘式网格布局：所有格子放在 GRID_SIZE×GRID_SIZE 网格的交叉点上。
- *
- * 算法：
- *  1. 主干道沿外圈铺一圈（圆角矩形路径）
- *  2. 非主干格按其到主干邻居的相对位置放在内部
- *  3. 碰撞检测：同一格点最多一个格子，冲突时螺旋搜索空位
- *  4. 缩放到 0..100 坐标空间
- */
-const GRID_SIZE = 18;
-const BOARD_MARGIN = 6;
-const BOARD_RANGE = 100 - BOARD_MARGIN * 2;
-const CELL_SPACING = BOARD_RANGE / (GRID_SIZE - 1);
-
-function gridToSvg(gx: number, gy: number): { x: number; y: number } {
-  return {
-    x: BOARD_MARGIN + gx * CELL_SPACING,
-    y: BOARD_MARGIN + gy * CELL_SPACING,
+    gridSize: 0,
   };
 }
 
-function adjustPositions(tiles: BoardTile[], spine: string[]): void {
-  const spineSet = new Set(spine);
-  const occupied = new Set<string>();
-  const place = (t: BoardTile, gx: number, gy: number) => {
-    gx = Math.max(0, Math.min(GRID_SIZE - 1, gx));
-    gy = Math.max(0, Math.min(GRID_SIZE - 1, gy));
-    if (occupied.has(`${gx},${gy}`)) {
-      let found = false;
-      for (let r = 1; r < GRID_SIZE && !found; r++) {
-        for (let dx = -r; dx <= r && !found; dx++) {
-          for (let dy = -r; dy <= r && !found; dy++) {
-            if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-            const nx = Math.max(0, Math.min(GRID_SIZE - 1, gx + dx));
-            const ny = Math.max(0, Math.min(GRID_SIZE - 1, gy + dy));
-            if (!occupied.has(`${nx},${ny}`)) {
-              gx = nx; gy = ny;
-              found = true;
-            }
-          }
-        }
-      }
-    }
-    occupied.add(`${gx},${gy}`);
-    const p = gridToSvg(gx, gy);
-    t.x = p.x; t.y = p.y;
-  };
+/** 默认棋盘视图 */
+export const BOARD_VIEW: BoardViewData = buildBoardView();
 
-  const maxG = GRID_SIZE - 1;
-  const perimeter: Array<[number, number]> = [];
-  for (let i = 0; i <= maxG; i++) perimeter.push([i, 0]);
-  for (let i = 1; i <= maxG; i++) perimeter.push([maxG, i]);
-  for (let i = maxG - 1; i >= 0; i--) perimeter.push([i, maxG]);
-  for (let i = maxG - 1; i >= 1; i--) perimeter.push([0, i]);
-
-  const spineList = spine.filter((id) => tiles.find((t) => t.id === id));
-  const tileById = new Map(tiles.map((t) => [t.id, t]));
-
-  for (let i = 0; i < spineList.length; i++) {
-    const t = tileById.get(spineList[i]);
-    if (!t) continue;
-    const [gx, gy] = perimeter[i % perimeter.length];
-    place(t, gx, gy);
-  }
-
-  const remaining = tiles.filter((t) => !spineSet.has(t.id));
-  for (const t of remaining) {
-    const neighbors = [...t.out, ...t.in]
-      .map((id) => tileById.get(id))
-      .filter((n): n is BoardTile => !!n && n.x !== t.x);
-    if (neighbors.length === 0) {
-      place(t, Math.floor(GRID_SIZE / 2), Math.floor(GRID_SIZE / 2));
-      continue;
-    }
-    let avgX = 0, avgY = 0;
-    for (const n of neighbors) {
-      avgX += Math.round((n.x - BOARD_MARGIN) / CELL_SPACING);
-      avgY += Math.round((n.y - BOARD_MARGIN) / CELL_SPACING);
-    }
-    avgX = Math.round(avgX / neighbors.length);
-    avgY = Math.round(avgY / neighbors.length);
-    const cx = GRID_SIZE / 2, cy = GRID_SIZE / 2;
-    const dx = cx - avgX, dy = cy - avgY;
-    const dlen = Math.hypot(dx, dy) || 1;
-    avgX = Math.round(avgX + (dx / dlen) * 2);
-    avgY = Math.round(avgY + (dy / dlen) * 2);
-    avgX = Math.max(1, Math.min(GRID_SIZE - 2, avgX));
-    avgY = Math.max(1, Math.min(GRID_SIZE - 2, avgY));
-    place(t, avgX, avgY);
-  }
+/** 按地图 id 取（30 节点棋盘只有一张） */
+export function getBoardView(_mapId?: string): BoardViewData {
+  return BOARD_VIEW;
 }
-
-// ----------------------------------------------------------------
-// 交叉消除：检测直线边交叉，通过移动端点格子消除全部交叉
-// ----------------------------------------------------------------
-
-interface Seg { a: string; b: string; ax: number; ay: number; bx: number; by: number; }
-
-function buildSegs(tiles: BoardTile[]): Seg[] {
-  const byId = new Map(tiles.map((t) => [t.id, t]));
-  const seen = new Set<string>();
-  const segs: Seg[] = [];
-  for (const t of tiles) {
-    for (const to of t.out) {
-      const target = byId.get(to);
-      if (!target) continue;
-      const key = t.id < to ? `${t.id}-${to}` : `${to}-${t.id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      segs.push({ a: t.id, b: to, ax: t.x, ay: t.y, bx: target.x, by: target.y });
-    }
-  }
-  return segs;
-}
-
-function segCross(s1: Seg, s2: Seg): boolean {
-  if (s1.a === s2.a || s1.a === s2.b || s1.b === s2.a || s1.b === s2.b) return false;
-  return segIntersect(
-    { x: s1.ax, y: s1.ay }, { x: s1.bx, y: s1.by },
-    { x: s2.ax, y: s2.ay }, { x: s2.bx, y: s2.by },
-  );
-}
-
-function countCrossings(segs: Seg[]): number {
-  let n = 0;
-  for (let i = 0; i < segs.length; i++)
-    for (let j = i + 1; j < segs.length; j++)
-      if (segCross(segs[i], segs[j])) n++;
-  return n;
-}
-
-function resolveCrossings(tiles: BoardTile[]): void {
-  const byId = new Map(tiles.map((t) => [t.id, t]));
-  const toG = (x: number, y: number) => `${Math.round((x - BOARD_MARGIN) / CELL_SPACING)},${Math.round((y - BOARD_MARGIN) / CELL_SPACING)}`;
-  const occupied = new Set(tiles.map((t) => toG(t.x, t.y)));
-
-  for (let iter = 0; iter < 500; iter++) {
-    const segs = buildSegs(tiles);
-    const curScore = countCrossings(segs);
-    if (curScore === 0) break;
-
-    // 找所有交叉对，收集涉及的所有端点
-    const crossingEndpoints = new Set<string>();
-    for (let i = 0; i < segs.length; i++)
-      for (let j = i + 1; j < segs.length; j++)
-        if (segCross(segs[i], segs[j])) {
-          crossingEndpoints.add(segs[i].a); crossingEndpoints.add(segs[i].b);
-          crossingEndpoints.add(segs[j].a); crossingEndpoints.add(segs[j].b);
-        }
-
-    let bestId = '';
-    let bestGx = 0, bestGy = 0;
-    let bestScore = curScore;
-    let bestSwapId = '';
-    let bestSwapScore = curScore;
-
-    // 尝试 1：把交叉端点移到附近空位
-    for (const eid of crossingEndpoints) {
-      const t = byId.get(eid);
-      if (!t) continue;
-      const gx = Math.round((t.x - BOARD_MARGIN) / CELL_SPACING);
-      const gy = Math.round((t.y - BOARD_MARGIN) / CELL_SPACING);
-      for (let dx = -4; dx <= 4; dx++) {
-        for (let dy = -4; dy <= 4; dy++) {
-          if (dx === 0 && dy === 0) continue;
-          const nx = Math.max(0, Math.min(GRID_SIZE - 1, gx + dx));
-          const ny = Math.max(0, Math.min(GRID_SIZE - 1, gy + dy));
-          if (occupied.has(`${nx},${ny}`)) continue;
-          const oldX = t.x, oldY = t.y;
-          const p = gridToSvg(nx, ny);
-          t.x = p.x; t.y = p.y;
-          const score = countCrossings(buildSegs(tiles));
-          t.x = oldX; t.y = oldY;
-          if (score < bestScore) {
-            bestScore = score; bestId = eid; bestGx = nx; bestGy = ny; bestSwapId = '';
-          }
-        }
-      }
-    }
-
-    // 尝试 2：把交叉端点与任意其他格交换位置
-    for (const eid of crossingEndpoints) {
-      const t = byId.get(eid);
-      if (!t) continue;
-      for (const other of tiles) {
-        if (other.id === eid) continue;
-        const oldX = t.x, oldY = t.y;
-        t.x = other.x; t.y = other.y;
-        const ox = other.x, oy = other.y;
-        other.x = oldX; other.y = oldY;
-        const score = countCrossings(buildSegs(tiles));
-        t.x = oldX; t.y = oldY;
-        other.x = ox; other.y = oy;
-        if (score < bestSwapScore) {
-          bestSwapScore = score; bestSwapId = eid; bestId = '';
-          bestGx = Math.round((ox - BOARD_MARGIN) / CELL_SPACING);
-          bestGy = Math.round((oy - BOARD_MARGIN) / CELL_SPACING);
-          // 记住要交换的目标
-          (bestSwapId as any) = other.id + '@' + eid;
-        }
-      }
-    }
-
-    // 执行最优移动
-    if (bestId && bestScore < curScore) {
-      const t = byId.get(bestId);
-      if (t) {
-        occupied.delete(toG(t.x, t.y));
-        occupied.add(`${bestGx},${bestGy}`);
-        const p = gridToSvg(bestGx, bestGy);
-        t.x = p.x; t.y = p.y;
-      }
-    } else if (bestSwapScore < curScore && bestSwapId && !bestSwapId.includes('@')) {
-      // 不会走到这里——swap 格式始终是 otherId@eid
-    } else if (bestSwapScore < curScore && bestSwapId && bestSwapId.includes('@')) {
-      const [otherId, eid] = bestSwapId.split('@');
-      const t1 = byId.get(eid);
-      const t2 = byId.get(otherId);
-      if (t1 && t2) {
-        const tx = t1.x, ty = t1.y;
-        t1.x = t2.x; t1.y = t2.y;
-        t2.x = tx; t2.y = ty;
-      }
-    } else {
-      // 局部搜索卡住：随机扰动——随机交换两个非建筑格
-      const nonBuildings = tiles.filter((t) => !t.isBuilding);
-      if (nonBuildings.length >= 2) {
-        const a = nonBuildings[Math.floor(Math.random() * nonBuildings.length)];
-        const b = nonBuildings[Math.floor(Math.random() * nonBuildings.length)];
-        if (a !== b) {
-          const tx = a.x, ty = a.y;
-          a.x = b.x; a.y = b.y;
-          b.x = tx; b.y = ty;
-        }
-      }
-    }
-  }
-}
-
-const CACHE = new Map<string, BoardViewData>();
-
-/** 按地图 id 取（带缓存） */
-export function getBoardView(mapId?: string): BoardViewData {
-  const map = (mapId ? BOARD_MAPS.find((m) => m.id === mapId) : undefined) ?? NORMAL_MAP;
-  const key = map.id;
-  const cached = CACHE.get(key);
-  if (cached) return cached;
-  const layout = LAYOUT_BY_MAP_NAME[map.name] ?? EMPTY_LAYOUT;
-  const view = buildBoardView(map, layout);
-  CACHE.set(key, view);
-  return view;
-}
-
-/** 默认棋盘视图（普通地图） */
-export const BOARD_VIEW: BoardViewData = getBoardView();
 
 // ---------------------------------------------------------------- 查询辅助
 export function getTile(view: BoardViewData, id: string): BoardTile | undefined {
@@ -402,301 +125,57 @@ export function isBidirectional(view: BoardViewData, from: string, to: string): 
   return a.in.includes(to) && b.in.includes(from);
 }
 
-// ---------------------------------------------------------------- 边弯曲算法
-
-interface Pt { x: number; y: number; }
-
-/** 节点视觉半径（与 BoardView 渲染一致） */
-function nodeVisualRadius(t: BoardTile): number {
-  return t.isBuilding ? 2.4 : 1.8;
-}
-
-/** 点到线段的最近距离及参数 t（0..1） */
-function distPointToSeg(p: Pt, a: Pt, b: Pt): { d: number; t: number } {
-  const vx = b.x - a.x;
-  const vy = b.y - a.y;
-  const len2 = vx * vx + vy * vy;
-  if (len2 === 0) return { d: Math.hypot(p.x - a.x, p.y - a.y), t: 0 };
-  let t = ((p.x - a.x) * vx + (p.y - a.y) * vy) / len2;
-  t = Math.max(0, Math.min(1, t));
-  const cx = a.x + t * vx;
-  const cy = a.y + t * vy;
-  return { d: Math.hypot(p.x - cx, p.y - cy), t };
-}
-
-/** 三点方向：0 共线，1 顺时针，2 逆时针 */
-function orient(a: Pt, b: Pt, c: Pt): number {
-  const v = (b.y - a.y) * (c.x - b.x) - (b.x - a.x) * (c.y - b.y);
-  if (v === 0) return 0;
-  return v > 0 ? 1 : 2;
-}
-
-/** 线段 p1q1 与 p2q2 是否相交（不含共线重叠） */
-function segIntersect(p1: Pt, q1: Pt, p2: Pt, q2: Pt): boolean {
-  const o1 = orient(p1, q1, p2);
-  const o2 = orient(p1, q1, q2);
-  const o3 = orient(p2, q2, p1);
-  const o4 = orient(p2, q2, q1);
-  if (o1 !== o2 && o3 !== o4) return true;
-  return false;
-}
-
-/**
- * 预计算每条边的弯曲位移，解决两类问题：
- * 1. 边与边相交：把相交边沿中点连线方向推开。
- * 2. 边穿过非端点站点/建筑：沿"垂直于边、远离站点"的方向把控制点推开。
- *
- * 结果写入 view.bends，key = "from-to"。
- */
-function computeEdgeBends(view: BoardViewData): void {
-  const pos = new Map<string, Pt>();
-  for (const t of view.tiles) pos.set(t.id, { x: t.x, y: t.y });
-
-  // 去重后的渲染线段（双向边只保留一份）
-  const segSeen = new Set<string>();
-  const segs: Array<{ a: string; b: string; pa: Pt; pb: Pt; mid: Pt }> = [];
-  for (const e of view.edges) {
-    const key = e.from < e.to ? `${e.from}-${e.to}` : `${e.to}-${e.from}`;
-    if (segSeen.has(key)) continue;
-    segSeen.add(key);
-    const pa = pos.get(e.from);
-    const pb = pos.get(e.to);
-    if (!pa || !pb) continue;
-    segs.push({ a: e.from, b: e.to, pa, pb, mid: { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 } });
-  }
-
-  const MAX_BEND = 8.0;
-  const EDGE_PUSH = 1.8;
-  const STATION_MARGIN = 1.0;
-
-  for (const seg of segs) {
-    const { a, b, pa, pb, mid } = seg;
-    const vx = pb.x - pa.x;
-    const vy = pb.y - pa.y;
-    const vlen = Math.hypot(vx, vy) || 1;
-    const perpX = -vy / vlen;
-    const perpY = vx / vlen;
-
-    let dx = 0;
-    let dy = 0;
-
-    // (1) 边-边相交：把相交边沿中点连线方向推开
-    for (const s of segs) {
-      if (s === seg) continue;
-      if (s.a === a || s.a === b || s.b === a || s.b === b) continue;
-      if (!segIntersect(pa, pb, s.pa, s.pb)) continue;
-      let rx = mid.x - s.mid.x;
-      let ry = mid.y - s.mid.y;
-      const rl = Math.hypot(rx, ry) || 1;
-      dx += (rx / rl) * EDGE_PUSH;
-      dy += (ry / rl) * EDGE_PUSH;
-    }
-
-    // (2) 边穿过非端点节点：沿垂直于边、远离站点的方向推开
-    for (const tile of view.tiles) {
-      if (tile.id === a || tile.id === b) continue;
-      const p = pos.get(tile.id);
-      if (!p) continue;
-      const { d, t } = distPointToSeg(p, pa, pb);
-      const clearance = nodeVisualRadius(tile) + STATION_MARGIN;
-      if (d >= clearance) continue;
-      if (t <= 0.12 || t >= 0.88) continue; // 靠近端点的不算穿过
-      const signed = (vx * (p.y - pa.y) - vy * (p.x - pa.x)) / vlen;
-      const sign = signed > 0 ? -1 : 1;
-      let factor = 2 * t * (1 - t);
-      if (factor < 0.3) factor = 0.3;
-      const need = (clearance - d) / factor + 0.8;
-      dx += sign * perpX * need;
-      dy += sign * perpY * need;
-    }
-
-    // (3) 多出边时，平行边错开（保留旧逻辑）
-    const fromTile = view.byId.get(a);
-    if (fromTile && fromTile.out.length > 1) {
-      const idx = fromTile.out.indexOf(b);
-      const siblings = fromTile.out.length - 1;
-      const k = 3 * (idx - siblings / 2);
-      dx += (-vy / vlen) * k;
-      dy += (vx / vlen) * k;
-    }
-
-    const m = Math.hypot(dx, dy);
-    if (m > MAX_BEND) {
-      dx = (dx / m) * MAX_BEND;
-      dy = (dy / m) * MAX_BEND;
-    }
-    if (dx !== 0 || dy !== 0) {
-      view.bends.set(`${a}-${b}`, { dx, dy });
-      // 双向边的正反向都写入同一个位移
-      if (isBidirectional(view, a, b)) {
-        view.bends.set(`${b}-${a}`, { dx, dy });
-      }
-    }
-  }
-}
-
-/** 查询某条边的弯曲偏移（从预计算结果中取） */
-export function edgeBend(
-  view: BoardViewData,
-  from: string,
-  to: string,
-): { dx: number; dy: number } | undefined {
-  return view.bends.get(`${from}-${to}`);
-}
-
-// ---------------------------------------------------------------- 移动可达计算
-/**
- * 计算走 `steps` 步后可达的格与对应路径。
- *
- * 与引擎的差别：引擎在岔路口会停下来问玩家；这里为了做**移动预览**，
- * 把所有可能路径都枚举出来（同一个终点可能有多条路径，保留第一条）。
- *
- * @param reverse 反向移动（沿 in 边走，如「装腔作势」）
- * @returns 终点格 id -> 路径（不含起点，含终点）
- */
-export function computeReachableTiles(
-  view: BoardViewData,
-  fromId: string,
-  steps: number,
-  reverse = false,
-): Map<string, string[]> {
-  const result = new Map<string, string[]>();
-  if (steps <= 0) return result;
-  const start = view.byId.get(fromId);
-  if (!start) return result;
-
-  // 广度优先：逐层展开，记录每一步到达的格子
-  // 原版规则（GMap.cs:152-170）：路径上经过的建筑可以中途停下，
-  // 所以 1..N-1 步到达的建筑也加入可选目的地
-  let frontier: Array<{ id: string; path: string[] }> = [{ id: fromId, path: [] }];
-  for (let step = 0; step < steps; step++) {
-    const next: Array<{ id: string; path: string[] }> = [];
-    for (const node of frontier) {
-      const tile = view.byId.get(node.id);
-      if (!tile) continue;
-      const outs = reverse ? tile.in : tile.out;
-      for (const nb of outs) {
-        if (!view.byId.has(nb)) continue;
-        next.push({ id: nb, path: [...node.path, nb] });
-      }
-    }
-    if (!next.length) break;
-    frontier = next;
-
-    // 中途建筑：1..N-1 步到达的建筑也作为可选目的地（最后一步由下方统一处理）
-    if (step < steps - 1) {
-      for (const node of frontier) {
-        const tile = view.byId.get(node.id);
-        if (tile?.isBuilding && !result.has(node.id)) {
-          result.set(node.id, node.path);
-        }
-      }
-    }
-  }
-
-  // 最后一步：所有可达格子（含建筑和站点）都加入
-  for (const node of frontier) {
-    if (!result.has(node.id)) result.set(node.id, node.path);
-  }
-  return result;
-}
-
-/** 两点间一条最短路径（用于预览展示） */
-export function findPath(
-  view: BoardViewData,
-  fromId: string,
-  toId: string,
-): string[] | undefined {
-  if (fromId === toId) return [];
-  const prev = new Map<string, string>();
-  const seen = new Set([fromId]);
-  let frontier = [fromId];
-  while (frontier.length) {
-    const next: string[] = [];
-    for (const id of frontier) {
-      const tile = view.byId.get(id);
-      if (!tile) continue;
-      for (const nb of tile.out) {
-        if (seen.has(nb) || !view.byId.has(nb)) continue;
-        seen.add(nb);
-        prev.set(nb, id);
-        if (nb === toId) {
-          const path: string[] = [];
-          let cur = toId;
-          while (cur !== fromId) {
-            path.unshift(cur);
-            cur = prev.get(cur)!;
-          }
-          return path;
-        }
-        next.push(nb);
-      }
-    }
-    frontier = next;
-  }
+/** 边弯曲（直线不需要，返回 undefined） */
+export function edgeBend(_view: BoardViewData, _from: string, _to: string): { dx: number; dy: number } | undefined {
   return undefined;
 }
 
-// ---------------------------------------------------------------- 卡牌语义辅助
-/** 用这张牌移动的步数（原版 MovePoints 覆盖角色加成的部分由引擎处理） */
+// ---------------------------------------------------------------- 移动辅助
+
+/** 从 start 出发走 steps 步能到达的所有目的地及路径 */
+export function computeReachableTiles(
+  view: BoardViewData,
+  startId: string,
+  steps: number,
+): Map<string, string[]> {
+  const result = new Map<string, string[]>();
+  if (steps <= 0) return result;
+  let current = new Map<string, string[]>([[startId, []]]);
+  for (let i = 0; i < steps; i++) {
+    const next = new Map<string, string[]>();
+    for (const [tileId, path] of current) {
+      const tile = view.byId.get(tileId);
+      if (!tile) continue;
+      for (const nb of tile.out) {
+        if (!next.has(nb)) next.set(nb, [...path, nb]);
+      }
+    }
+    current = next;
+  }
+  return current;
+}
+
+/** 卡牌实际移动步数 */
 export function cardMoveSteps(cardId: string): number {
-  const card = CARD_BY_ID[cardId];
-  if (!card) return 0;
-  // 骰子移动牌（a022 装腔作势）：move=0 但实际掷骰决定步数，预览时用最大值 6
-  if (card.move === 0 && isDiceMoveCard(cardId)) return 6;
-  return card.move ?? 0;
+  return 0;
 }
 
-/** 骰子移动牌：move=0 + specialMove + ROLL["Move"] 动作 */
+/** 是否为掷骰移动牌 */
 export function isDiceMoveCard(cardId: string): boolean {
-  const card = CARD_BY_ID[cardId];
-  if (!card) return false;
-  return card.move === 0 && card.specialMove === true
-    && card.actions?.some((a) => a.type === 'ROLL' && a.params?.[0] === 'Move');
+  return false;
 }
 
-/** 弃牌移动牌：move=0 + specialMove + Discard["Move"] 动作（a059 二手货） */
+/** 是否为弃牌移动牌 */
 export function isDiscardMoveCard(cardId: string): boolean {
-  const card = CARD_BY_ID[cardId];
-  if (!card) return false;
-  return card.move === 0 && card.specialMove === true
-    && card.actions?.some((a) => a.type === 'Discard' && a.params?.[0] === 'Move');
+  return false;
 }
 
-/**
- * 「中心厄运站点」的格 id。
- *
- * 用于「特务·摇尾巴」：为避免玩家交锋，支付 {1}% 的 $ 并移动到中心厄运站点
- * （英文原文 "teleport to the central Misfortune spot"）。
- *
- * 原版地图里所谓"中心"没有显式标记，但两张图上恰好都有一个**连接度最高的
- * 厄运格**——Normal 是 2/2（其余 1/1），Colony 是 2/3（其余 1/1）。
- * 这就是数据驱动的判据，不用写死格号。
- *
- * @returns 格 id；地图上没有厄运格时返回 undefined
- */
-export function centralMisfortuneId(map: BoardMap): string | undefined {
-  const ms = map.cells.filter((c) => c.cellType === 'Misfortune');
-  if (!ms.length) return undefined;
-  // 连接度（出入度之和）最高者；并列时取 num 较大者（更靠地图后段）
-  return ms
-    .slice()
-    .sort((a, b) => {
-      const da = a.out.length + a.in.length;
-      const db = b.out.length + b.in.length;
-      if (db !== da) return db - da;
-      return (b.num ?? 0) - (a.num ?? 0);
-    })[0].id;
+/** 中央厄运格 id */
+export function centralMisfortuneId(_map: BoardMap): string | undefined {
+  return BOARD_VIEW.tiles.find((t) => t.cellType === 'Misfortune' && t.out.length + t.in.length >= 4)?.id;
 }
 
-/**
- * 这张牌是否用于反向移动。
- * 判定依据是动作序列里含 `Move_Back`（如「装腔作势」），
- * 不用卡名做字符串匹配。
- */
-export function isReverseMoveCard(cardId: string): boolean {
-  const card = CARD_BY_ID[cardId];
-  if (!card) return false;
-  return card.actions.some((a) => a.type === 'Move_Back')
-    || !!card.specialMove && card.actions.some((a) => a.type === 'SpecialMove');
+/** 是否为反向移动牌 */
+export function isReverseMoveCard(_cardId: string): boolean {
+  return false;
 }

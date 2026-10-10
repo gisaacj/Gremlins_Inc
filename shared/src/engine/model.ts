@@ -13,13 +13,13 @@ import type {
 import {
   ACTION_CARDS, CARD_BY_ID, CHARACTERS, CHARACTER_BY_ID,
   JAIL_CARDS, MISFORTUNE_CARDS, CHAOS_CARDS, CELL_TYPES,
-  CELL_TYPE_BY_ID, CELL_TYPE_BY_NAME, BOARD_MAPS, NORMAL_MAP, GAME_CONST,
+  CELL_TYPE_BY_ID, CELL_TYPE_BY_NAME, BOARD_MAPS, NORMAL_MAP, CUSTOM_MAP, GAME_CONST,
 } from '../gamedata/index.js';
 
 export {
   ACTION_CARDS, CARD_BY_ID, CHARACTERS, CHARACTER_BY_ID,
   JAIL_CARDS, MISFORTUNE_CARDS, CHAOS_CARDS, CELL_TYPES,
-  CELL_TYPE_BY_ID, CELL_TYPE_BY_NAME, BOARD_MAPS, NORMAL_MAP, GAME_CONST,
+  CELL_TYPE_BY_ID, CELL_TYPE_BY_NAME, BOARD_MAPS, NORMAL_MAP, CUSTOM_MAP, GAME_CONST,
 };
 export type {
   ActionCard, BoardCell, BoardMap, GameCharacter, JailCard,
@@ -236,7 +236,8 @@ export interface EngineState {
 
 // ---------------------------------------------------------------- 棋盘索引
 export function getMap(state: Pick<EngineState, 'mapId'>): BoardMap {
-  return BOARD_MAPS.find((m) => m.id === state.mapId) ?? NORMAL_MAP;
+  return BOARD_MAPS.find((m) => m.id === state.mapId)
+    ?? CUSTOM_MAP;
 }
 
 export function cellIndex(map: BoardMap): Map<string, BoardCell> {

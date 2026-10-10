@@ -105,6 +105,9 @@ export function buildBoardView(map: BoardMap, layout: BoardLayout): BoardViewDat
   // 调整坐标
   adjustPositions(tiles, layout.spine);
 
+  // 消除边交叉
+  resolveCrossings(tiles);
+
   const edges: BoardEdge[] = [];
   for (const t of tiles) for (const to of t.out) edges.push({ from: t.id, to });
 
@@ -153,7 +156,6 @@ function adjustPositions(tiles: BoardTile[], spine: string[]): void {
   const place = (t: BoardTile, gx: number, gy: number) => {
     gx = Math.max(0, Math.min(GRID_SIZE - 1, gx));
     gy = Math.max(0, Math.min(GRID_SIZE - 1, gy));
-    // 螺旋搜索空位
     if (occupied.has(`${gx},${gy}`)) {
       let found = false;
       for (let r = 1; r < GRID_SIZE && !found; r++) {
@@ -175,25 +177,16 @@ function adjustPositions(tiles: BoardTile[], spine: string[]): void {
     t.x = p.x; t.y = p.y;
   };
 
-  // ── 主干道：沿外圈铺 ──
-  // 外圈路径：上边左→右，右边上→下，下边右→左，左边下→上
-  const perimeter: Array<[number, number]> = [];
   const maxG = GRID_SIZE - 1;
-  // 上边
+  const perimeter: Array<[number, number]> = [];
   for (let i = 0; i <= maxG; i++) perimeter.push([i, 0]);
-  // 右边
   for (let i = 1; i <= maxG; i++) perimeter.push([maxG, i]);
-  // 下边
   for (let i = maxG - 1; i >= 0; i--) perimeter.push([i, maxG]);
-  // 左边
   for (let i = maxG - 1; i >= 1; i--) perimeter.push([0, i]);
 
   const spineList = spine.filter((id) => tiles.find((t) => t.id === id));
   const tileById = new Map(tiles.map((t) => [t.id, t]));
-  const spineIdx = new Map<string, number>();
-  spineList.forEach((id, i) => spineIdx.set(id, i));
 
-  // 放主干道
   for (let i = 0; i < spineList.length; i++) {
     const t = tileById.get(spineList[i]);
     if (!t) continue;
@@ -201,27 +194,22 @@ function adjustPositions(tiles: BoardTile[], spine: string[]): void {
     place(t, gx, gy);
   }
 
-  // ── 非主干格：放在邻居旁边 ──
   const remaining = tiles.filter((t) => !spineSet.has(t.id));
   for (const t of remaining) {
-    // 找已放置的邻居，取平均位置
     const neighbors = [...t.out, ...t.in]
       .map((id) => tileById.get(id))
       .filter((n): n is BoardTile => !!n && n.x !== t.x);
     if (neighbors.length === 0) {
-      // 没有已放置的邻居，放中心
       place(t, Math.floor(GRID_SIZE / 2), Math.floor(GRID_SIZE / 2));
       continue;
     }
     let avgX = 0, avgY = 0;
     for (const n of neighbors) {
-      const nx = Math.round((n.x - BOARD_MARGIN) / CELL_SPACING);
-      const ny = Math.round((n.y - BOARD_MARGIN) / CELL_SPACING);
-      avgX += nx; avgY += ny;
+      avgX += Math.round((n.x - BOARD_MARGIN) / CELL_SPACING);
+      avgY += Math.round((n.y - BOARD_MARGIN) / CELL_SPACING);
     }
     avgX = Math.round(avgX / neighbors.length);
     avgY = Math.round(avgY / neighbors.length);
-    // 往内圈偏移（远离边缘）
     const cx = GRID_SIZE / 2, cy = GRID_SIZE / 2;
     const dx = cx - avgX, dy = cy - avgY;
     const dlen = Math.hypot(dx, dy) || 1;
@@ -230,6 +218,153 @@ function adjustPositions(tiles: BoardTile[], spine: string[]): void {
     avgX = Math.max(1, Math.min(GRID_SIZE - 2, avgX));
     avgY = Math.max(1, Math.min(GRID_SIZE - 2, avgY));
     place(t, avgX, avgY);
+  }
+}
+
+// ----------------------------------------------------------------
+// 交叉消除：检测直线边交叉，通过移动端点格子消除全部交叉
+// ----------------------------------------------------------------
+
+interface Seg { a: string; b: string; ax: number; ay: number; bx: number; by: number; }
+
+function buildSegs(tiles: BoardTile[]): Seg[] {
+  const byId = new Map(tiles.map((t) => [t.id, t]));
+  const seen = new Set<string>();
+  const segs: Seg[] = [];
+  for (const t of tiles) {
+    for (const to of t.out) {
+      const target = byId.get(to);
+      if (!target) continue;
+      const key = t.id < to ? `${t.id}-${to}` : `${to}-${t.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      segs.push({ a: t.id, b: to, ax: t.x, ay: t.y, bx: target.x, by: target.y });
+    }
+  }
+  return segs;
+}
+
+function segCross(s1: Seg, s2: Seg): boolean {
+  if (s1.a === s2.a || s1.a === s2.b || s1.b === s2.a || s1.b === s2.b) return false;
+  return segIntersect(
+    { x: s1.ax, y: s1.ay }, { x: s1.bx, y: s1.by },
+    { x: s2.ax, y: s2.ay }, { x: s2.bx, y: s2.by },
+  );
+}
+
+function countCrossings(segs: Seg[]): number {
+  let n = 0;
+  for (let i = 0; i < segs.length; i++)
+    for (let j = i + 1; j < segs.length; j++)
+      if (segCross(segs[i], segs[j])) n++;
+  return n;
+}
+
+function resolveCrossings(tiles: BoardTile[]): void {
+  const byId = new Map(tiles.map((t) => [t.id, t]));
+  const toG = (x: number, y: number) => `${Math.round((x - BOARD_MARGIN) / CELL_SPACING)},${Math.round((y - BOARD_MARGIN) / CELL_SPACING)}`;
+  const occupied = new Set(tiles.map((t) => toG(t.x, t.y)));
+
+  for (let iter = 0; iter < 500; iter++) {
+    const segs = buildSegs(tiles);
+    const curScore = countCrossings(segs);
+    if (curScore === 0) break;
+
+    // 找所有交叉对，收集涉及的所有端点
+    const crossingEndpoints = new Set<string>();
+    for (let i = 0; i < segs.length; i++)
+      for (let j = i + 1; j < segs.length; j++)
+        if (segCross(segs[i], segs[j])) {
+          crossingEndpoints.add(segs[i].a); crossingEndpoints.add(segs[i].b);
+          crossingEndpoints.add(segs[j].a); crossingEndpoints.add(segs[j].b);
+        }
+
+    let bestId = '';
+    let bestGx = 0, bestGy = 0;
+    let bestScore = curScore;
+    let bestSwapId = '';
+    let bestSwapScore = curScore;
+
+    // 尝试 1：把交叉端点移到附近空位
+    for (const eid of crossingEndpoints) {
+      const t = byId.get(eid);
+      if (!t) continue;
+      const gx = Math.round((t.x - BOARD_MARGIN) / CELL_SPACING);
+      const gy = Math.round((t.y - BOARD_MARGIN) / CELL_SPACING);
+      for (let dx = -4; dx <= 4; dx++) {
+        for (let dy = -4; dy <= 4; dy++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = Math.max(0, Math.min(GRID_SIZE - 1, gx + dx));
+          const ny = Math.max(0, Math.min(GRID_SIZE - 1, gy + dy));
+          if (occupied.has(`${nx},${ny}`)) continue;
+          const oldX = t.x, oldY = t.y;
+          const p = gridToSvg(nx, ny);
+          t.x = p.x; t.y = p.y;
+          const score = countCrossings(buildSegs(tiles));
+          t.x = oldX; t.y = oldY;
+          if (score < bestScore) {
+            bestScore = score; bestId = eid; bestGx = nx; bestGy = ny; bestSwapId = '';
+          }
+        }
+      }
+    }
+
+    // 尝试 2：把交叉端点与任意其他格交换位置
+    for (const eid of crossingEndpoints) {
+      const t = byId.get(eid);
+      if (!t) continue;
+      for (const other of tiles) {
+        if (other.id === eid) continue;
+        const oldX = t.x, oldY = t.y;
+        t.x = other.x; t.y = other.y;
+        const ox = other.x, oy = other.y;
+        other.x = oldX; other.y = oldY;
+        const score = countCrossings(buildSegs(tiles));
+        t.x = oldX; t.y = oldY;
+        other.x = ox; other.y = oy;
+        if (score < bestSwapScore) {
+          bestSwapScore = score; bestSwapId = eid; bestId = '';
+          bestGx = Math.round((ox - BOARD_MARGIN) / CELL_SPACING);
+          bestGy = Math.round((oy - BOARD_MARGIN) / CELL_SPACING);
+          // 记住要交换的目标
+          (bestSwapId as any) = other.id + '@' + eid;
+        }
+      }
+    }
+
+    // 执行最优移动
+    if (bestId && bestScore < curScore) {
+      const t = byId.get(bestId);
+      if (t) {
+        occupied.delete(toG(t.x, t.y));
+        occupied.add(`${bestGx},${bestGy}`);
+        const p = gridToSvg(bestGx, bestGy);
+        t.x = p.x; t.y = p.y;
+      }
+    } else if (bestSwapScore < curScore && bestSwapId && !bestSwapId.includes('@')) {
+      // 不会走到这里——swap 格式始终是 otherId@eid
+    } else if (bestSwapScore < curScore && bestSwapId && bestSwapId.includes('@')) {
+      const [otherId, eid] = bestSwapId.split('@');
+      const t1 = byId.get(eid);
+      const t2 = byId.get(otherId);
+      if (t1 && t2) {
+        const tx = t1.x, ty = t1.y;
+        t1.x = t2.x; t1.y = t2.y;
+        t2.x = tx; t2.y = ty;
+      }
+    } else {
+      // 局部搜索卡住：随机扰动——随机交换两个非建筑格
+      const nonBuildings = tiles.filter((t) => !t.isBuilding);
+      if (nonBuildings.length >= 2) {
+        const a = nonBuildings[Math.floor(Math.random() * nonBuildings.length)];
+        const b = nonBuildings[Math.floor(Math.random() * nonBuildings.length)];
+        if (a !== b) {
+          const tx = a.x, ty = a.y;
+          a.x = b.x; a.y = b.y;
+          b.x = tx; b.y = ty;
+        }
+      }
+    }
   }
 }
 

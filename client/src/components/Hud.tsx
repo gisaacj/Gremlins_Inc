@@ -4,10 +4,24 @@ import {
   CHARACTER_BY_ID, CARD_BY_ID, MISFORTUNE_CARDS, JAIL_CARDS, CHAOS_CARDS,
   characterAbilities,
 } from '@gremlins/shared';
-import { PLAYER_COLORS } from '@gremlins/shared';
+import { PLAYER_COLORS, BOARD_VIEW, getBoardView } from '@gremlins/shared';
 import { useState } from 'react';
 import { CardDetail } from './Card.js';
 import '../styles/hud.css';
+
+/**
+ * 把棋盘格 id 转成可读的站点名。
+ *
+ * 用于玩家面板显示"他在哪个站点" —— 用户反馈面板状态不够全（bug #7）。
+ * 棋盘格 id 是原版 UIN 字符串，界面不能直接显示。
+ */
+function positionLabel(position: string | undefined): string {
+  if (!position) return '—';
+  const view = getBoardView() ?? BOARD_VIEW;
+  const tile = view?.byId?.get(position);
+  if (!tile) return '未知';
+  return tile.label || tile.cellType || '未知';
+}
 
 interface Props {
   game: SerializedGameState;
@@ -158,15 +172,43 @@ export function PlayerList({ game, mySocketId }: { game: SerializedGameState; my
                 {char && <span style={{ color: 'var(--color-text-muted)', fontWeight: 'normal', marginLeft: 4 }}>{char.text.name}</span>}
               </div>
               <div className="player-res">
-                <span title="齿轮">⚙{p.resources.cogs}</span>
-                <span title="金币">${p.resources.gold}</span>
+                <span title="齿轮（胜利分）">⚙{p.resources.cogs}</span>
+                <span title="金钱">${p.resources.gold}</span>
+                <span title="收入">📈{p.resources.income}</span>
+                <span title="选票">🗳{p.resources.votes}</span>
+                <span title="罪恶">😈{p.resources.malice}</span>
                 <span title="手牌">🂠{p.handCount}</span>
+                {p.secretCount > 0 && <span title="秘密卡张数">🕵{p.secretCount}</span>}
               </div>
               <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                 {game.mayorId === p.id && <span className="tag-mayor">镇长</span>}
                 {p.inJail && <span className="tag-jail">狱</span>}
                 {p.skipNextTurn && <span className="tag-skip">跳</span>}
               </div>
+            {/* 第二行：所在站点 / 永久卡 / 交锋战绩 / 监狱经验
+                用户反馈"其他玩家的面板太小了，看不清别人的状态，状态应该更全一些" */}
+            <div className="player-status-detail">
+              <span className="ps-pos" title="所在站点">📍{positionLabel(p.position)}</span>
+              {p.permanents.length > 0 && (
+                <span
+                  className="ps-perm"
+                  title={`永久卡：${p.permanents.map((id) => CARD_BY_ID[id]?.text.name ?? id).join('、')}`}
+                >
+                  🃏{p.permanents.length}
+                </span>
+              )}
+              {p.conflicts.total > 0 && (
+                <span
+                  className="ps-conflict"
+                  title={`交锋战绩：参与 ${p.conflicts.total} 次 / 发起 ${p.conflicts.init} 次 / 胜 ${p.conflicts.won} 次`}
+                >
+                  ⚔{p.conflicts.won}/{p.conflicts.total}
+                </span>
+              )}
+              {p.jailExperience > 0 && (
+                <span className="ps-jailxp" title={`监狱经验 ${p.jailExperience}`}>🏅{p.jailExperience}</span>
+              )}
+            </div>
             </div>
           );
         })}

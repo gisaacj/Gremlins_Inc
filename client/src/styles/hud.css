@@ -89,14 +89,20 @@
 }
 
 .player-status-row {
+  /* 用户反馈"其他玩家的面板太小了，看不清别人的状态"（bug #7）：
+     字号 11 → 13，头像与内边距一并放大。
+     flex-wrap 让元素多了以后自动换行而不是被压扁。 */
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 6px;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  padding: 7px 9px;
   background: var(--color-bg-2);
-  border-radius: 4px;
-  font-size: 11px;
-  border-left: 3px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  border-left: 4px solid var(--color-border);
 }
 
 .player-status-row.me { background: var(--color-panel-2); }
@@ -105,15 +111,16 @@
 .player-status-row.disconnected { opacity: 0.5; }
 
 .player-avatar {
-  width: 18px;
-  height: 18px;
+  /* 与 player-status-row 一起放大（bug #7） */
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: bold;
-  font-size: 10px;
-  flex: 0 0 18px;
+  font-size: 13px;
+  flex: 0 0 26px;
 }
 
 .player-name {
@@ -176,4 +183,25 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+
+/* ── 玩家面板第二行：所在站点 / 永久卡 / 交锋战绩 / 监狱经验 ──
+   用户反馈面板信息太少（bug #7）。 */
+.player-status-detail {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding-left: 0;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.player-status-detail > span {
+  white-space: nowrap;
+}
+.ps-pos {
+  color: var(--color-text);
+  font-weight: 500;
 }

@@ -1,0 +1,273 @@
+.hand {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--color-bg-2);
+  border-top: 1px solid var(--color-border);
+  overflow-x: auto;
+  align-items: flex-end;
+  min-height: 120px;
+  padding-bottom: 12px;
+  padding-bottom: calc(12px + var(--safe-bottom));
+}
+
+.card {
+  flex: 0 0 auto;
+  width: 110px;
+  min-height: 160px;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 6px;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+  user-select: none;
+  position: relative;
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 卡牌背景色：白=普通 蓝=秘密 红=罪恶 */
+.card-bg-regular {
+  background: linear-gradient(160deg, #faf8f0, #e8e4d8);
+  border-color: #c8c0a8;
+  color: #2a2a2a;
+}
+.card-bg-secret {
+  background: linear-gradient(160deg, #2a4a7a, #152a4a);
+  border-color: #4a7abf;
+  color: #e0e8f0;
+}
+.card-bg-criminal {
+  background: linear-gradient(160deg, #5a1818, #2a0808);
+  border-color: #b02828;
+  color: #f0d8d8;
+}
+
+/* 兼容旧 theme class */
+.card.theme-gold { background: linear-gradient(160deg, #faf8f0, #e8e4d8); border-color: #c8c0a8; color: #2a2a2a; }
+.card.theme-crime { background: linear-gradient(160deg, #5a1818, #2a0808); border-color: #b02828; color: #f0d8d8; }
+.card.theme-office { background: linear-gradient(160deg, #2a4a7a, #152a4a); border-color: #4a7abf; color: #e0e8f0; }
+.card.theme-neutral { background: var(--color-panel); }
+
+.card:hover {
+  transform: translateY(-8px);
+  box-shadow: 0 8px 16px rgba(0,0,0,0.4);
+}
+
+.card.selected {
+  transform: translateY(-12px);
+  box-shadow: 0 12px 20px rgba(245,184,0,0.3);
+  border-color: var(--color-gold);
+}
+
+.card.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.card.disabled:hover {
+  transform: none;
+}
+
+.card-move {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  border: 1px solid;
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 13px;
+}
+
+.card-bg-regular .card-move {
+  color: #5a3a00;
+  border-color: #8a6000;
+  background: rgba(255,255,255,0.5);
+}
+.card-bg-secret .card-move {
+  color: #ffd54f;
+  border-color: #ffd54f;
+  background: rgba(0,0,0,0.3);
+}
+.card-bg-criminal .card-move {
+  color: #ff8a65;
+  border-color: #ff8a65;
+  background: rgba(0,0,0,0.3);
+}
+
+.card-move.zero {
+  color: var(--color-text-muted);
+  border-color: var(--color-border);
+}
+
+.card-building {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  font-size: 9px;
+  background: rgba(0,0,0,0.25);
+  padding: 1px 5px;
+  border-radius: 3px;
+  max-width: 60px;
+  text-align: right;
+}
+
+.card-body {
+  margin-top: 28px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.card-name {
+  font-size: 12px;
+  font-weight: bold;
+  margin-bottom: 3px;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.card-line {
+  font-size: 10px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.card-cost-line { font-weight: bold; opacity: 0.9; }
+.card-harvest-line { opacity: 0.85; }
+.card-rules-line { opacity: 0.7; margin-top: 2px; }
+
+.card-permanent {
+  position: absolute;
+  bottom: 3px;
+  left: 4px;
+  font-size: 9px;
+  font-weight: bold;
+  color: #f5b800;
+  text-shadow: 0 0 3px rgba(0,0,0,0.8);
+}
+
+/* 卡牌详情弹层 */
+.card-detail-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 20px;
+  animation: fadeIn 0.2s;
+}
+
+.card-detail {
+  width: min(360px, 90vw);
+  border: 2px solid var(--color-gold);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* 背景与文字颜色交给 card-bg-* 主题类提供，保证可读 */
+}
+
+.card-detail h3 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--color-gold);
+}
+
+/* 普通卡（浅色背景）的标题用深色，金色的标题在浅底上对比不足 */
+.card-bg-regular.card-detail h3 {
+  color: #6a4a00;
+}
+
+.card-detail-info {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.card-detail-rules {
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 8px;
+  background: rgba(0,0,0,0.18);
+  border-radius: 6px;
+}
+
+.card-detail-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.card-detail-desc {
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 8px;
+  background: var(--color-bg-2);
+  border-radius: 6px;
+}
+
+.card-detail-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.card-detail-actions button {
+  flex: 1;
+}
+
+/* 操作面板 */
+.action-panel {
+  position: fixed;
+  left: 50%;
+  bottom: 140px;
+  transform: translateX(-50%);
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  z-index: 50;
+  max-width: 90vw;
+  flex-wrap: wrap;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+
+.action-prompt {
+  color: var(--color-text);
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+/* 厄运牌选择列表（两害取其轻） */
+.misfortune-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 90vw;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.misfortune-list button {
+  font-size: 11px;
+  padding: 3px 6px;
+}
+.misfortune-list .mf-sev {
+  color: var(--color-text-muted);
+  font-size: 9px;
+}

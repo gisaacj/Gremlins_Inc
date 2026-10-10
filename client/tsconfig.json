@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "composite": true,
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "references": [{ "path": "../shared" }],
+  "include": ["src/**/*", "vite.config.ts", "capacitor.config.ts"]
+}

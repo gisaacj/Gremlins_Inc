@@ -13,9 +13,10 @@ import { getPlayer } from './model.js';
 import {
   answerChoice, chaosOptions, currentPlayerId, hasPending,
   isTurn, jailTurn, listOptions, moveWithCard, nextTurn, playCard, playChaosCard,
-  runOption, skipPlay,
+  rollMoveDice, runOption, skipPlay,
 } from './api.js';
 import { discardMoveCard } from './api.js';
+import { isDiceMoveCard } from '../board-view.js';
 import { buildEnginePrompt, serializeEngineState } from './serialize.js';
 import { createState } from './state.js';
 import type { EngineInitArgs } from './state.js';
@@ -94,6 +95,18 @@ export class LocalGame {
   }
 
   // ---------------------------------------------------------------- 人类动作
+  /**
+   * 掷骰决定特殊移动牌的步数（a022 装腔作势）。
+   *
+   * ⚠️ 界面**不能**用 `Math.random()` 自己掷：那样玩家可以反复取消预览
+   * 直到掷出满意点数（用户 bug #6）。单机也用本地引擎的权威 RNG，
+   * 保证与联机流程一致、且掷骰序列可复现。
+   */
+  rollMoveDice(playerId: string, cardId: string) {
+    if (!isDiceMoveCard(cardId)) return 0;
+    return rollMoveDice(this.state, playerId);
+  }
+
   /** 用卡移动（可带目的地；岔路由引擎按目的地自动选） */
   move(playerId: string, cardId: string, destinationTileId?: string) {
     return moveWithCard(this.state, playerId, cardId, destinationTileId);

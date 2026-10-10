@@ -235,6 +235,14 @@ export interface EngineState {
     cardId: string;
     /** 目的地格 id（用于在中途建筑提前停止） */
     destTileId?: string;
+    /**
+     * 预先算好的整条路径（含终点）。
+     *
+     * 玩家在预览里选定目的地后，`startMove` 用 `findPathTo` 算出路径存这里，
+     * 引擎就按它一路走完、不再中途问岔路口 —— 保证**预览与实际落点一致**。
+     * 走完即清空；只有"无法恰好走到"时才回退到逐岔路口询问。
+     */
+    plannedPath?: string[];
   };
   /** 最近一次掷骰结果 */
   lastRoll?: number;

@@ -33,9 +33,24 @@ export interface C2SEvents {
   'game:select_move_card': (payload: {
     cardId: string;
     destinationTileId?: string;
-    /** 掷骰移动牌（如 a022 装腔作势）由客户端先掷骰，把步数发来；服务端写入 customMoveSteps。 */
+    /**
+     * @deprecated 掷骰移动牌的步数**不再由客户端决定**。
+     *
+     * 原版流程是「选牌 → **服务端**掷骰 → 返回步数 → 玩家选目的地」，
+     * 而早先由客户端 `Math.random()` 掷好再随预览发给服务端，于是玩家可以
+     * **反复取消重开直到掷出满意的点数**（用户报的 bug #6）。
+     * 现在改走 `game:roll_move_dice`，服务端用权威 RNG 掷骰并回传结果。
+     */
     customSteps?: number;
   }) => void;
+  /**
+   * 掷骰决定特殊移动牌的步数（a022 装腔作势）。
+   *
+   * 由**服务端**用权威 RNG 掷，结果写进 `customMoveSteps` 并通过 ack 回传，
+   * 客户端拿这个值去做移动预览。重复调用会重新掷骰，所以客户端只在
+   * 「玩家点了这张牌」时调一次，不能作为"预览"反复调用。
+   */
+  'game:roll_move_dice': (payload: { cardId: string }, ack?: (res: { ok: boolean; steps?: number; error?: string }) => void) => void;
   /** 到达建筑后选择打牌 */
   'game:play_card': (payload: { cardId: string; targetPlayerId?: string; targetBuilding?: string }) => void;
   /**

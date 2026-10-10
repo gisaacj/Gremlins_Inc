@@ -25,7 +25,7 @@ import {
 } from './permanents.js';
 import { bribeModifier, breathingTaxFrom, fireAbility, hasCellChoice, insuranceCost } from './abilities.js';
 import { availableOptions, diceTableOf } from './options.js';
-import { centralMisfortuneId } from '../board-view.js';
+import { centralMisfortuneId, findPathTo, graphOfMap, isReverseMoveCard } from '../board-view.js';
 
 export interface EngineInitArgs {
   roomId: string;
@@ -319,6 +319,14 @@ export function startMove(
   playerId: string,
   cardId: string,
   choices?: Record<string, string[]>,
+  /**
+   * 目的地等选项。
+   *
+   * destinationTileId 是玩家在**预览**里选定的落点：引擎会据此预先算好
+   * 整条路径并按它走，不再中途逐个岔路口提问。
+   * （早先忽略这个字段，导致实际落点与预览不一致——用户 bug #1。）
+   */
+  options?: { destinationTileId?: string },
 ): { ok: boolean; reason?: string; path?: string[]; pending?: PendingChoice } {
   const p = getPlayer(state, playerId);
   if (!p) return { ok: false, reason: '玩家不存在' };
@@ -344,14 +352,52 @@ export function startMove(
     p.lastMoveSteps = steps;
     p.movedThisTurn = true;
     p.cardsPlayedThisTurn += 1;
-    state.moveCursor = { playerId, stepsLeft: steps, path: [], cardId, destTileId: undefined };
+    state.moveCursor = { playerId, stepsLeft: steps, path: [], cardId, destTileId: options?.destinationTileId };
     pushLog(state, p.id, `使用「${card.text.name}」移动 ${steps} 步`);
+
+    // ── 按玩家选定的目的地预先算好整条路径 ──
+    //
+    // ⚠️ 这里原先**忽略**了 destinationTileId（只把它当"到了就提前停"的标记），
+    // 于是引擎每到岔路口就再问一次方向，玩家最终走到哪**与预览无关** ——
+    // 用户报的 bug #1："从收入移动 3 步，理论上可以停留在监狱，
+    // 选中后却走到了赌博"。
+    //
+    // 现在：预览与执行共用 `findPathTo`，选定的目的地决定整条路径，
+    // 引擎不再中途提问（真正走不通时才回退到逐岔路口询问）。
+    const dest = options?.destinationTileId;
+    if (dest && dest !== p.cellId) {
+      const graph = graphOfMap(getMap(state), isReverseMoveCard(card.id));
+      const full = findPathTo(graph, p.cellId, steps, dest);
+      if (full) {
+        state.moveCursor.plannedPath = full;
+      } else {
+        pushLog(state, p.id, `无法恰好用 ${steps} 步走到所选目的地，改为逐路口选择`);
+      }
+    }
+
     // 原版规则：用牌后立即补抽一张（手牌始终 6 张）
     drawTo(state, p, 1);
   }
 
   const cursor = state.moveCursor;
   if (!cursor) return { ok: false, reason: '没有进行中的移动' };
+
+  // ── 有预定路径：按它走，不问路口 ──
+  if (cursor.plannedPath?.length) {
+    const planned = cursor.plannedPath;
+    let i = cursor.path.length;
+    while (i < planned.length) {
+      const next = planned[i]!;
+      if (!getCell(state, next)) break;
+      p.cellId = next;
+      cursor.path.push(next);
+      cursor.stepsLeft -= 1;
+      i++;
+    }
+    cursor.plannedPath = undefined;
+    cursor.stepsLeft = 0;
+    // 落到下面"走完"的处理
+  } else {
 
   // 逐步推进
   while (cursor.stepsLeft > 0) {
@@ -404,6 +450,8 @@ export function startMove(
     state.pending = pending;
     return { ok: true, pending, path: cursor.path };
   }
+
+  } // ← 结束 plannedPath 的 else 分支
 
   // 走完
   const path = cursor.path.slice();

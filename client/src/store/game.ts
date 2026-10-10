@@ -128,7 +128,8 @@ interface GameStore {
   selectCard: (id: string | null) => void;
   selectTarget: (id: string | null) => void;
   setCardDetail: (id: string | null) => void;
-  startMovePreview: (cardId: string) => void;
+  /** 开移动预览。掷骰移动牌会**向服务端要骰子步数**，因此是异步的。 */
+  startMovePreview: (cardId: string) => Promise<void>;
   selectMoveDest: (tileId: string) => void;
   confirmMove: () => void;
   cancelMovePreview: () => void;
@@ -381,8 +382,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     getSocket().emit('game:select_move_card', { cardId });
   },
 
-  startMovePreview: (cardId) => {
-    const { game, selfId } = get();
+  startMovePreview: async (cardId) => {
+    const { game, selfId, mode } = get();
     if (!game) return;
     const me = game.players.find((p) => p.id === selfId);
     if (!me) return;
@@ -390,12 +391,41 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!card) return;
     const reverse = isReverseMoveCard(cardId);
 
-    // 掷骰移动牌（a022 装腔作势）：先掷骰，用结果作为步数
+    // ── 掷骰移动牌（a022 装腔作势）：步数由**服务端**掷 ──
+    //
+    // ⚠️ 早先这里用 `Math.random()` 在客户端掷，再随预览发给服务端，于是
+    // 玩家可以反复取消重开直到掷出满意的点数（用户报的 bug #6）。
+    // 原版流程是「选牌 → 服务端掷骰 → 返回步数 → 选目的地」，
+    // 所以在线模式必须向服务端要这个值。
     let steps = cardMoveSteps(cardId);
     let rolledSteps: number | undefined;
     if (isDiceMoveCard(cardId)) {
-      rolledSteps = 1 + Math.floor(Math.random() * 6);
+      if (mode === 'local') {
+        // 单机：本地引擎有权威 RNG（用 LocalGame 的 rollMoveDice，
+        // 不再用 Math.random，以免与引擎序列不同步）
+        const l = get().local;
+        rolledSteps = l ? l.rollMoveDice(selfId, cardId) : 1 + Math.floor(Math.random() * 6);
+      } else {
+        rolledSteps = await new Promise<number | undefined>((resolve) => {
+          const sock = getSocket();
+          const timer = setTimeout(() => resolve(undefined), 5000);
+          sock.emit('game:roll_move_dice', { cardId }, (res) => {
+            clearTimeout(timer);
+            if (!res?.ok) {
+              log.warn(`roll_move_dice 失败: ${res?.error}`);
+              resolve(undefined);
+              return;
+            }
+            resolve(res.steps);
+          });
+        });
+      }
+      if (rolledSteps == null) {
+        log.error('未能取得骰子步数，取消预览');
+        return;
+      }
       steps = rolledSteps;
+      log.info(`掷骰移动牌 ${cardId} → ${steps} 步（服务端权威）`);
     }
 
     const board = game.mapId ? getBoardView(game.mapId) : BOARD_VIEW;
@@ -423,19 +453,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
   confirmMove: () => {
     const mp = get().movePreview;
     if (!mp || mp.selectedDest == null) return;
-    const { cardId, selectedDest, rolledSteps } = mp;
+    const { cardId, selectedDest } = mp;
     if (get().mode === 'local') {
+      // 掷骰移动牌的步数已在 `startMovePreview` 里由**本地引擎的权威 RNG**掷好
+      // 并写进 player.flags（`rollMoveDice`），这里不再重复掷。
       withLocal(get, set, (g) => {
-        // 掷骰移动牌：先把骰子结果写入 player.flags，startMove 会读取
-        if (rolledSteps != null) {
-          const p = g.state.players.find((x) => x.id === MY_ID);
-          if (p) p.flags['customMoveSteps'] = rolledSteps;
-        }
         g.move(MY_ID, cardId, selectedDest);
       });
     } else {
-      log.info(`emit game:select_move_card cardId=${cardId} dest=${selectedDest} steps=${rolledSteps ?? 'auto'}`);
-      getSocket().emit('game:select_move_card', { cardId, destinationTileId: selectedDest, customSteps: rolledSteps } as any);
+      // ⚠️ 不再发送 customSteps：步数已由服务端在 `game:roll_move_dice` 时掷定，
+      // 客户端传值会让玩家自己决定骰子（用户 bug #6）。
+      log.info(`emit game:select_move_card cardId=${cardId} dest=${selectedDest}`);
+      getSocket().emit('game:select_move_card', { cardId, destinationTileId: selectedDest });
     }
     set({ selectedCardId: null, movePreview: null });
   },

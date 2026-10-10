@@ -180,7 +180,94 @@ export function computeReachableTiles(
   return result;
 }
 
-/** 用这张牌移动的步数 */
+/**
+ * `findPathTo` 需要的最小图信息。
+ *
+ * 刻意不依赖 `BoardViewData`/`BoardMap` 中任何一个 —— 客户端预览拿的是
+ * `BoardViewData`，引擎拿的是 `BoardMap`，两边结构不同。用最小接口
+ * 才能让**预览与执行共用同一份寻路逻辑**（这正是修 bug #1 的关键）。
+ */
+export interface AdjacencyGraph {
+  has(id: string): boolean;
+  /** 从 id 出发的邻接格（`reverse` 时调用方传反向表） */
+  neighbors(id: string): string[];
+}
+
+/** 从 `BoardViewData` 造邻接图 */
+export function graphOfView(view: BoardViewData, reverse = false): AdjacencyGraph {
+  return {
+    has: (id) => view.byId.has(id),
+    neighbors: (id) => {
+      const t = view.byId.get(id);
+      if (!t) return [];
+      return (reverse ? t.in : t.out).filter((x) => view.byId.has(x));
+    },
+  };
+}
+
+/** 从引擎的 `BoardMap` 造邻接图 */
+export function graphOfMap(
+  map: { cells: Array<{ id: string; in: string[]; out: string[] }> },
+  reverse = false,
+): AdjacencyGraph {
+  const idx = new Map(map.cells.map((c) => [c.id, c]));
+  return {
+    has: (id) => idx.has(id),
+    neighbors: (id) => {
+      const c = idx.get(id);
+      if (!c) return [];
+      return (reverse ? c.in : c.out).filter((x) => idx.has(x));
+    },
+  };
+}
+
+/**
+ * 找出从 `startId` 出发、走**恰好** `steps` 步能到达 `destId` 的路径。
+ *
+ * 用途：让**引擎**按玩家在预览里选定/看到的那条路径走，而不是到了岔路口
+ * 再问一次——两者不一致正是用户报的 bug #1
+ * （"我从收入移动 3 步，理论上可以停留在监狱，选中的却是赌博"）。
+ *
+ * ⚠️ 预览（`computeReachableTiles`）与执行（`startMove`）都按 `out` 数组
+ * 顺序做 BFS，所以"某目的地对应哪条路径"在两边一致。
+ *
+ * @returns 路径（含终点，长度为 `steps`），不可达则 `undefined`
+ */
+export function findPathTo(
+  graph: AdjacencyGraph,
+  startId: string,
+  steps: number,
+  destId: string,
+): string[] | undefined {
+  if (steps <= 0) return undefined;
+  if (!graph.has(startId) || !graph.has(destId)) return undefined;
+  if (startId === destId) return undefined; // 0 步不算"走到"
+
+  // BFS 逐层；同一 (步数, 格子) 只保留**第一条**路径（与预览一致）
+  let frontier: Array<{ id: string; path: string[] }> = [{ id: startId, path: [] }];
+  const seen = new Set<string>([`0:${startId}`]);
+
+  for (let step = 0; step < steps; step++) {
+    const next: Array<{ id: string; path: string[] }> = [];
+    for (const node of frontier) {
+      for (const nb of graph.neighbors(node.id)) {
+        const path = [...node.path, nb];
+        if (nb === destId && path.length === steps) return path;
+        const key = `${path.length}:${nb}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        next.push({ id: nb, path });
+      }
+    }
+    if (!next.length) break;
+    frontier = next;
+  }
+  return undefined;
+}
+
+/**
+ * 用这张牌移动的步数。
+ */
 export function cardMoveSteps(cardId: string): number {
   const card = CARD_BY_ID[cardId];
   if (!card) return 0;

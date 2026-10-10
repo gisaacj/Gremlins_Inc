@@ -176,12 +176,16 @@ export function moveWithCard(
   // 掷骰移动牌的步数（从 player.flags 读取，由 rollMoveDice 设置）
   const effectiveSteps = p.flags['customMoveSteps'] ?? card.move;
 
-  // 逐段推进，遇到岔路时按"是否仍在通往目的地的路径上"自动选
-  let result = startMove(state, playerId, cardId);
-  // 设置目的地，让移动循环在中途建筑可以提前停止
+  // 把目的地交给 `startMove`：它会用 `findPathTo` **预先算好整条路径**并按它走，
+  // 中途不再逐个岔路口提问。这样引擎的实际落点与界面上显示/选定的目的地
+  // 必然一致（早先只把目的地当"到了就提前停"的标记，实际落点是靠贪心选岔路
+  // 凑出来的，于是"选监狱却走到赌博"——用户 bug #1）。
+  let result = startMove(state, playerId, cardId, undefined, { destinationTileId });
+  // 兼容：仍保留 destTileId 供"中途建筑提前停止"的旧逻辑使用
   if (result.ok && state.moveCursor && destinationTileId) {
     state.moveCursor.destTileId = destinationTileId;
   }
+  // 兜底：只有"无法恰好 N 步走到该目的地"（没算出 plannedPath）时才回退到逐岔路询问
   let guard = 0;
   while (result.pending && guard++ < 40) {
     const pend = result.pending;
@@ -190,7 +194,7 @@ export function moveWithCard(
     const pick = autoPickBranch(state, pend, destinationTileId, playerId, cardId, effectiveSteps);
     if (!pick) break;
 
-    result = startMove(state, playerId, cardId, { [pend.kind]: [pick] });
+    result = startMove(state, playerId, cardId, { [pend.kind]: [pick] }, { destinationTileId });
   }
 
   if (!result.ok) return fail(result.reason ?? '移动失败');

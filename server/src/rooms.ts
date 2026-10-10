@@ -3,11 +3,12 @@ import type {
   RoomConfig, LobbyState, LobbyPlayer, PlayerPrompt,
   C2SEvents, S2CEvents,
 } from '@gremlins/shared';
-import { DEFAULT_ROOM_CONFIG, CHARACTERS } from '@gremlins/shared';
+import { DEFAULT_ROOM_CONFIG, CHARACTERS, isDiceMoveCard } from '@gremlins/shared';
 import type { EngineState } from '@gremlins/shared/engine';
 import {
   answerChoice, buildEnginePrompt, currentPlayerId, hasPending, isTurn,
-  jailTurn, moveWithCard, newGame, nextTurn, playCard, playChaosCard, runOption, serializeEngineState, skipPlay,
+  jailTurn, moveWithCard, newGame, nextTurn, playCard, playChaosCard, rollMoveDice, runOption,
+  serializeEngineState, skipPlay,
 } from '@gremlins/shared/engine';
 import { runAITurn } from './ai.js';
 import { loggers } from './utils/logger.js';
@@ -353,16 +354,28 @@ export function attachHandlers(io: SServer, socket: SSocket): void {
   };
 
   socket.on('game:select_move_card', (payload) => {
-    log.info('game:select_move_card cardId=', payload.cardId, 'dest=', payload.destinationTileId, 'customSteps=', payload.customSteps);
+    log.info('game:select_move_card cardId=', payload.cardId, 'dest=', payload.destinationTileId);
     runAction('select_move_card', (_room, state) => {
-      // 掷骰移动牌（a022 装腔作势）：客户端先掷骰，把结果作为 customSteps 发来。
-      // 之前服务端忽略此字段，导致 move=0 的特殊移动牌在联机模式走 0 步。
-      if (payload.customSteps != null) {
-        const p = state.players.find((x) => x.id === socket.id);
-        if (p) p.flags['customMoveSteps'] = payload.customSteps;
-      }
+      // ⚠️ 掷骰移动牌的步数**不再接受客户端传入的 customSteps** ——
+      // 那让玩家可以反复重开预览直到掷出满意点数（用户 bug #6）。
+      // 步数现在由 `game:roll_move_dice` 在服务端掷好并写入 player.flags。
       return moveWithCard(state, socket.id, payload.cardId, payload.destinationTileId);
     });
+  });
+
+  // 掷骰决定特殊移动牌步数（**服务端权威 RNG**）
+  socket.on('game:roll_move_dice', (payload: { cardId: string }, ack?: (res: { ok: boolean; steps?: number; error?: string }) => void) => {
+    log.info('game:roll_move_dice cardId=', payload?.cardId);
+    const room = registry.getRoomBySocket(socket.id);
+    if (!room?.gameState) { ack?.({ ok: false, error: '不在对局中' }); return; }
+    if (room.phase !== 'playing') { ack?.({ ok: false, error: '对局未开始' }); return; }
+    const state = room.gameState;
+    if (currentPlayerId(state) !== socket.id) { ack?.({ ok: false, error: '不是你的回合' }); return; }
+    if (!isDiceMoveCard(payload.cardId)) { ack?.({ ok: false, error: '这张牌不是掷骰移动牌' }); return; }
+    const steps = rollMoveDice(state, socket.id);
+    log.info('game:roll_move_dice →', steps);
+    afterAction(io, room);
+    ack?.({ ok: true, steps });
   });
 
   socket.on('game:play_card', (payload) => {

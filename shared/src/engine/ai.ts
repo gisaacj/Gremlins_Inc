@@ -11,11 +11,11 @@
 //   4) 能移动 → 移动（优先走向建筑）
 //   5) 都不行 → 结束回合
 // =============================================================
-import type { EngineState } from './model.js';
-import { CARD_BY_ID, CELL_TYPE_BY_ID, cellTypeOf, getCell, getPlayer } from './model.js';
+import type { ChaosCard, EnginePlayer, EngineState } from './model.js';
+import { CARD_BY_ID, CELL_TYPE_BY_ID, CHAOS_CARDS, cellTypeOf, getCell, getPlayer } from './model.js';
 import {
-  answerChoice, currentPlayerId, isTurn, jailTurn, listOptions, movableCards, nextTurn,
-  playableCards, playCard, runOption,
+  answerChoice, chaosOptions, currentPlayerId, isTurn, jailTurn, listOptions, movableCards,
+  nextTurn, playableCards, playCard, playChaosCard, runOption,
 } from './api.js';
 import { moveWithCard } from './api.js';
 
@@ -29,7 +29,7 @@ function cellTypeParam(state: EngineState, p: { cellId: string }, i: number, fal
 /** AI 一次决策的日志（供调用方展示"AI 在想什么"） */
 export interface AIStep {
   playerId: string;
-  action: 'choose' | 'jail' | 'play' | 'move' | 'endTurn' | 'idle';
+  action: 'choose' | 'jail' | 'play' | 'move' | 'endTurn' | 'chaos' | 'idle';
   detail?: string;
 }
 
@@ -84,6 +84,21 @@ export class AIPlayer {
       // 可选动作：只在明显有利时做（投资回本、卖资源、打工…）
       if (this.tryOption(state, playerId)) {
         log.push({ playerId, action: 'choose', detail: '可选动作' });
+        n++;
+        stalls = this.tick(state, stamp, stalls);
+        if (stalls >= 3) {
+          log.push({ playerId, action: 'idle', detail: '连续无进展，强制结束回合' });
+          this.endTurn(state, playerId);
+          break;
+        }
+        continue;
+      }
+
+      // 混沌卡（暴乱卡）：共享池，值就打。
+      // 放在可选动作之后、效果牌之前——它收益最大且"打一张少一张"，
+      // 晚了会被别人抢走。
+      if (this.tryChaos(state, playerId)) {
+        log.push({ playerId, action: 'chaos', detail: '混沌卡' });
         n++;
         stalls = this.tick(state, stamp, stalls);
         if (stalls >= 3) {
@@ -150,6 +165,70 @@ export class AIPlayer {
   private tick(state: EngineState, prevStamp: string, stalls: number): number {
     const now = `${state.round}:${state.currentIndex}:${state.log.length}:${state.pending?.kind ?? '-'}`;
     return now === prevStamp ? stalls + 1 : 0;
+  }
+
+  /**
+   * 尝试打出一张**值得打**的混沌卡。
+   *
+   * 混沌卡是共享池（打一张少一张），但**不能见钱就打**：
+   * 它动辄 1000~2000 金，把现金花光之后 AI 会寸步难行
+   * （AI 的主要收入来自"付得起的移动/效果牌"）。
+   * 实测把门槛设成 `chaosScore > 0` 时，AI 会在攒够第一笔钱时立刻打掉，
+   * 然后陷入长期贫困，整局再也打不出第二张。
+   *
+   * 所以加一道**财力规划**：
+   *  - 能直接把齿轮打到目标线 → 立刻打（赢优先）
+   *  - 否则要求付完后仍留有储备（`CHAOS_RESERVE`）
+   *  - 门槛仍用 `chaosScore > 0`（收益大于代价与罪恶）
+   *
+   * c001「供奉」要丢永久卡，AI 取当前第一张（原版是玩家自选）。
+   *
+   * @returns 是否打出了卡
+   */
+  private tryChaos(state: EngineState, playerId: string): boolean {
+    const me = getPlayer(state, playerId);
+    if (!me) return false;
+
+    const cands = chaosOptions(state, playerId)
+      .filter((o) => o.playable)
+      .filter((o) => chaosScore(o.cardId) > 0)
+      .sort((a, b) => chaosScore(b.cardId) - chaosScore(a.cardId));
+    if (!cands.length) return false;
+
+    for (const cand of cands) {
+      const card = CHAOS_CARDS.find((c) => c.id === cand.cardId);
+      if (!card) continue;
+
+      // 赢了就立刻打，不看储备
+      const gainScore = card.income?.score ?? 0;
+      const winsNow = me.res.score + gainScore >= state.targetScore;
+
+      if (!winsNow && !this.canAffordChaosReserve(me, card)) continue;
+
+      const needsSacrifice = card.actions.some((a) => String(a.type) === 'SacrificePermanent');
+      if (needsSacrifice) {
+        const perm = me.permanents[0];
+        if (!perm) continue; // 没永久卡就打不了，换下一张
+        if (playChaosCard(state, playerId, card.id, { permanentId: perm }).ok) return true;
+        continue;
+      }
+      if (playChaosCard(state, playerId, card.id).ok) return true;
+    }
+    return false;
+  }
+
+  /**
+   * 打出这张混沌卡之后，是否还留得住储备。
+   *
+   * 储备按**该卡代价的 2 倍**取（上限 $2500）：
+   * 代价越大说明局面越富，留的也该越多；但不必无限攒，
+   * 否则永远打不出 2000 金的「破坏王」。
+   */
+  private canAffordChaosReserve(me: EnginePlayer, card: ChaosCard): boolean {
+    if (card.price <= 0) return true;
+    const key = card.priceType === 'Vote' ? 'vote' : 'money';
+    const reserve = Math.min(card.price * 2, 2500);
+    return me.res[key] - card.price >= reserve;
   }
 
   /**
@@ -266,6 +345,26 @@ export function cardScore(id: string): number {
   const gain = (inc?.score ?? 0) * 10 + (inc?.vote ?? 0) * 3 + (inc?.money ?? 0) / 50;
   const loss = (out?.score ?? 0) * 10 + (out?.money ?? 0) / 50 + (out?.malice ?? 0);
   return gain - loss;
+}
+
+/**
+ * 混沌卡价值粗排。
+ *
+ * 与 `cardScore` 同一个量纲：齿轮 ×10、选票 ×3、金钱 ÷50。
+ * 收益取自卡牌的 `Income` 字段（原版把混沌卡收益放在这里，`Outcome` 全是 0）。
+ *
+ * 代价有**两层**：
+ *  1. 直接代价（金钱/选票）
+ *  2. 罪恶——它会把之后每次贿赂都推高（贿赂 = $20 + 罪恶），
+ *     所以按 2 分/点计入，避免 AI 为了齿轮把自己搞到付不起贿赂。
+ */
+export function chaosScore(cardId: string): number {
+  const c = CHAOS_CARDS.find((x) => x.id === cardId);
+  if (!c) return 0;
+  const inc = (c.income ?? {}) as Record<string, number | undefined>;
+  const gain = (inc.score ?? 0) * 10 + (inc.vote ?? 0) * 3 + (inc.money ?? 0) / 50;
+  const cost = c.priceType === 'Vote' ? (c.price ?? 0) * 3 : (c.price ?? 0) / 50;
+  return gain - cost - (inc.malice ?? 0) * 2;
 }
 
 /** 默认共享实例（服务端与客户端单机都能直接用） */

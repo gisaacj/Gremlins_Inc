@@ -229,7 +229,9 @@ function stationOptions(
   switch (cellType) {
     // 银行：投资 Param1 金 → 收入 +Param2
     case 'Bank': {
-      const cost = pr[0] || 10;
+      // 原版规则：投资金额 = 当前收入值（Param1=10 是静态面板兜底，非实际费用）
+      // 投资后收入 +Param2（=10）
+      const cost = Math.max(10, p.res.income);
       const gain = pr[1] || 10;
       out.push({
         id: 'bank.invest',
@@ -545,11 +547,14 @@ export function doOption(
   switch (parts[0]) {
     // ---- 站点动作 ----
     case 'bank': {
-      const cost = pr[0] || 10;
+      // 原版规则：投资金额 = 当前收入值（非固定 10），收入 +Param2
+      const cost = Math.max(10, p.res.income);
       const gain = pr[1] || 10;
       if (!hasRes(p, 'money', cost)) return fail(`需要 ${cost} 金钱`);
       addRes(p, 'money', -cost);
       addRes(p, 'income', gain);
+      // 记录投资金额，供「银行家·即时股息」回合末返还
+      p.flags['bankInvestAmount'] = cost;
       logIt(`投资 ${cost} 金，收入 +${gain}`);
       return doneUsed(`投资 ${cost} 金，收入 +${gain}`);
     }

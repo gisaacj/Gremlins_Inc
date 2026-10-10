@@ -52,14 +52,14 @@ function putAt(s: EngineState, p: EnginePlayer, cellType: string): string {
 }
 
 console.log('=== 1. 选项按格子类型出现 ===');
-check('银行给出「投资」且参数与数据一致（10 金 → 收入 +10）', () => {
+check('银行给出「投资」且参数与数据一致（投资收入金额 → 收入 +10）', () => {
   const s = game();
   const p = byChar(s, 'Banker');
   putAt(s, p, 'Bank');
   const opts = availableOptions(s, p.id);
   const invest = opts.find((o) => o.id === 'bank.invest');
   assert.ok(invest, `未给出投资选项：${opts.map((o) => o.id).join(', ')}`);
-  assert.ok(invest!.label.includes('10'), `标签应含参数 10：${invest!.label}`);
+  assert.ok(invest!.label.includes('30'), `标签应含当前收入 30：${invest!.label}`);
   console.log(`      ${invest!.label}`);
 });
 check('办公楼给出「卖 1 选票 → 70 金」', () => {
@@ -109,7 +109,7 @@ check('钱不够时投资选项 affordable=false 且给出原因', () => {
   p.res.money = 3;
   const o = availableOptions(s, p.id).find((x) => x.id === 'bank.invest')!;
   assert.equal(o.affordable, false);
-  assert.ok(o.reason && o.reason.includes('10'), `原因：${o.reason}`);
+  assert.ok(o.reason && o.reason.includes('30'), `原因：${o.reason}`);
 });
 check('选票不足时办公楼选项被标记为不可用', () => {
   const s = game();
@@ -121,7 +121,7 @@ check('选票不足时办公楼选项被标记为不可用', () => {
 });
 
 console.log('\n=== 3. 执行效果 ===');
-check('投资：-10 金，收入 +10', () => {
+check('投资：-收入金额 金，收入 +10', () => {
   const s = game();
   const p = byChar(s, 'Banker');
   putAt(s, p, 'Bank');
@@ -129,7 +129,7 @@ check('投资：-10 金，收入 +10', () => {
   const income = p.res.income;
   const r = doOption(s, p.id, 'bank.invest');
   assert.ok(r.ok, r.error);
-  assert.equal(p.res.money, money - 10);
+  assert.equal(p.res.money, money - income);
   assert.equal(p.res.income, income + 10);
 });
 check('卖选票：-1 选票，+70 金', () => {

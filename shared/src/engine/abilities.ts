@@ -621,8 +621,18 @@ function applyAbility(
       // 贿赂计算时由 bribeAmount 读取（每 N 罪恶 +1）
       return false;
     case 'extraCardAtOffice':
+    case 'bankerDividends': {
+      // 银行家·即时股息：回合末返还本回合银行投资金额
+      const invested = p.flags['bankInvestAmount'];
+      if (typeof invested === 'number' && invested > 0) {
+        p.res.money += invested;
+        delete p.flags['bankInvestAmount'];
+        state.log.push({ round: state.round, playerId: p.id, text: `「${spec.label}」：返还投资 ${invested} 金`, ts: Date.now() });
+        return true;
+      }
+      return false;
+    }
     case 'discardAtDanger':
-    case 'bankerDividends':
     case 'sellIncome':
     case 'excavation':
       // 这些是"可选动作"，需要玩家决策；先把可用性写到 flags 供 UI/后续扩展

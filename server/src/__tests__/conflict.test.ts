@@ -278,7 +278,7 @@ check('用真实卡牌走到对手所在非建筑站 → 触发交锋', () => {
  * 顺序选"先格子后交锋"，是因为交锋挂起被应答后引擎不会回到 `resolveLanding`，
  * 若先交锋会把格子效果**静默丢掉**（实测确认）。
  */
-check('停在对手所在的 Danger/Police 格：先挂格子交互，之后触发交锋', () => {
+check('停在对手所在的 Danger/Police 格：**先交锋**，赢了留在格上再处理格子效果', () => {
   const st = game(4242);
   const a = getPlayer(st, 'p0')!;
   const b = getPlayer(st, 'p1')!;
@@ -305,24 +305,30 @@ check('停在对手所在的 Danger/Police 格：先挂格子交互，之后触�
   assert.ok(r.ok, `移动应成功：${r.error}`);
 
   const destCell = getMap(st).cells.find((c) => c.id === pick!.dest)!;
-  // 1) 先挂格子交互（买保险 / 付贿赂）
-  assert.ok(st.pending, '应挂起格子交互');
-  assert.equal(st.pending!.kind.startsWith('conflict:'), false,
-    `第一步应是格子交互，实际 ${st.pending!.kind}`);
-  console.log(`      ${destCell.cellType} 格 → 先挂起 ${st.pending!.kind}`);
+  // 1) **先交锋**。
+  //
+  // 依据 `TAG.Game_Label_Conflict_Description`：
+  //   "The player who bids the most pays up and **remains on the spot**,
+  //    the other player is **arrested**."
+  // 输家被带走、只有赢家留在该站 → 格子效果是**留给留下来的人**结算的。
+  // 若先结算格子效果，等于"没争到站点的人也照吃了站点效果"。
+  assert.ok(st.pending, '应挂起交锋');
+  assert.ok(st.pending!.kind.startsWith('conflict:'),
+    `第一步应是交锋，实际 ${st.pending!.kind}`);
+  console.log(`      ${destCell.cellType} 格 → 先挂起 ${st.pending!.kind}（交锋）`);
 
-  // 2) 应答格子交互后，应当补上交锋
+  // 2) 走完交锋后，才轮到格子交互（买保险 / 付贿赂）
   let guard = 0;
-  while (st.pending && !st.pending.kind.startsWith('conflict:') && guard++ < 10) {
+  while (st.pending && st.pending.kind.startsWith('conflict:') && guard++ < 10) {
     const pd = st.pending;
     const ans = pd.options.slice(0, Math.max(1, pd.min ?? 1)).map((o) => o.value);
     const rr = resolvePending(st, pd.playerId, ans);
     st.pending = rr.pending;
   }
-  assert.ok(st.pending, '应交接到交锋挂起');
-  assert.ok(st.pending!.kind.startsWith('conflict:'),
-    `格子交互结束后应触发交锋，实际 ${st.pending!.kind}`);
-  console.log(`      格子交互结束 → ${st.pending!.kind}（交锋已触发）`);
+  assert.ok(st.pending, '交锋结束后应交接到格子交互');
+  assert.equal(st.pending!.kind.startsWith('conflict:'), false,
+    `交锋后应是格子交互，实际 ${st.pending!.kind}`);
+  console.log(`      交锋结束 → ${st.pending!.kind}（格子效果，只给留下来的赢家）`);
 });
 check('走到对手所在的**建筑**格不触发交锋', () => {  const st = game(4242);
   const a = getPlayer(st, 'p0')!;

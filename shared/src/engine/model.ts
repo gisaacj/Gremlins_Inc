@@ -239,6 +239,18 @@ export interface EngineState {
   /** 最近一次掷骰结果 */
   lastRoll?: number;
   /**
+   * "欠着"的格子效果。
+   *
+   * 落地顺序是**先交锋、后格子效果**（依据 `TAG.Game_Label_Conflict_Description`：
+   * "The player who bids the most pays up and **remains on the spot**, the other
+   * player is **arrested**" —— 输家被带走，只有赢家留下，所以格子效果留给留下来的人）。
+   *
+   * 但交锋会挂起等双方出价，而挂起被应答后引擎不会回到 `resolveLanding`，
+   * 所以发起交锋时把 `{playerId, cellId}` 记在这里，
+   * 等交锋结算完（或被逃避）再用 `resumePendingCellEffect` 补做。
+   */
+  pendingCellEffect?: { playerId: string; cellId: string };
+  /**
    * 多阶段挂起的暂存（拍卖出价、交锋出价等需要"收齐各方输入"的场景）。
    *
    * 每次 `PendingChoice` 挂起时 `resume.scratch` 会快照 `ActionContext.scratch`，

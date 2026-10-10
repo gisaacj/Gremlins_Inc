@@ -536,6 +536,60 @@ $ node tools/audit-doc-consistency.mjs
 
 ---
 
+## 第 16 轮：修正落地顺序 —— **先交锋，赢了留在格上才处理格子效果**
+
+### 用户指正
+
+> "格子效果是先交锋，赢了留在格子才处理格子"
+
+我上一轮（第 11 轮）把顺序定成了"先格子、后交锋"，理由是技术性的
+（反过来会让格子效果被静默丢掉）。**这个顺序是错的。**
+
+### 源码依据
+
+`TAG.Game_Label_Conflict_Description`：
+
+> "Players {1} and {2} are in Player Conflict! Each player calls their bid.
+> **The player who bids the most pays up and remains on the spot, the other
+> player is arrested.** If the bids are equal, the player with the least ^ wins."
+
+关键在 **"remains on the spot"（留在该站点）** —— 输家被带走，
+只有赢家留下来。所以格子效果自然只结算给**留下来的人**。
+若先结算格子效果，等于"没争到站点的人也照吃了站点效果"，与原版不符。
+
+### 实现
+
+难点：交锋会挂起等双方出价，而**挂起被应答后引擎不会回到 `resolveLanding`**。
+所以新增一个"欠账"机制：
+
+- 发起交锋时把 `{playerId, cellId}` 记进 `state.pendingCellEffect`；
+- 交锋结算完（`applyConflictOutcome`）或被逃避（`applyConflictEscape`）后，
+  调 `resumePendingCellEffect` 补做格子效果；
+- 补做前**比对 `cellId`** —— 赢家可能被 `[i]` 卡（a070「敲诈！」）挪到相邻格，
+  此时已不在原格，就不该再吃原格效果。
+
+实测挂起链（P0 走到对手所在的格子）：
+
+| 格子 | 挂起链 |
+|---|---|
+| Bribe | `conflict → conflict`（格子效果即时结算，赢家付双倍贿赂） |
+| Danger | `conflict → conflict → danger:P0` |
+| Police | `conflict → conflict → police:P0` |
+
+**交锋确实排在格子交互之前**，且只有留下来的赢家进入格子交互。
+
+### 顺带修掉的两处
+
+1. 第 11 轮我写的回归测试断言的是**错误顺序**（"先挂格子交互"），
+   这轮改成断言正确顺序。
+2. `settleConflict` 的一个 `return undefined;` 在改写时被误删了函数结尾的 `}`，
+   类型检查立刻报出来（`TS1005: '}' expected`），已修。
+
+新增测试 `landing-order.test.ts`（10 项），含"输家从不吃格子效果"
+"赢家留在原格""整条链无残留挂起"等断言。
+
+---
+
 ## 一、重要前提：反编译范围的边界 ⚠️
 
 **必须先读这一节**，否则会误判文档的权威程度。

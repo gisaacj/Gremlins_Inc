@@ -422,6 +422,10 @@ export function startMove(
       state.pending = pending;
       return { ok: true, path, pending };
     }
+    // 落地效果已结算（无挂起）——标记，让 maybeAutoEnd 可以自动结束回合
+    p.flags['cellResolved'] = 1;
+  } else {
+    p.flags['cellResolved'] = 1;
   }
 
   return { ok: true, path };
@@ -1366,7 +1370,9 @@ export function endTurn(state: EngineState): void {
     if (!p.isAI && p.movedThisTurn && !p.flags['optionsOffered']
       && availableOptions(state, p.id).length > 0) {
       p.flags['optionsOffered'] = 1;
-      p.movedThisTurn = false; // 避免下次 endTurn 又停一次
+      // 不能把 movedThisTurn 设为 false——会让 canMoveWithCard 通过，
+      // 导致玩家在一回合内非法二次移动（曾导致冒险格保险弹两次）。
+      // optionsOffered 标志本身已防止下次 endTurn 再停一次。
       pushLog(state, p.id, '此地可用可选动作（可直接结束回合）');
       return;
     }

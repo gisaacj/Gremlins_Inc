@@ -58,7 +58,9 @@ function maybeAutoEnd(state: EngineState): ActionResult {
   if (p.extraTurns > 0 && movableCards(state, pid).length > 0) return ok();
 
   // 还有可打的效果牌 → 不自动结束
-  if (playableCards(state, pid).length > 0) return ok();
+  // 但要考虑 cardsPlayedThisTurn：移动用 1 张、效果牌用 1 张后不能再打。
+  const canPlayMore = p.cardsPlayedThisTurn <= 1 || p.flags['canPlayAgain'] === 1;
+  if (canPlayMore && playableCards(state, pid).length > 0) return ok();
 
   // 还有可选动作 → 不自动结束
   if (availableOptions(state, pid).length > 0) return ok();
@@ -537,6 +539,9 @@ export function answerChoice(
   const r = resolvePending(state, playerId, values);
   if (!r.ok) return fail(r.reason ?? '应答失败');
   if (r.pending) return ok(r.pending);
+  // 挂起决策已解决（如冒险格保险/警察格）——落地效果结算完毕
+  const p = getPlayer(state, playerId);
+  if (p) p.flags['cellResolved'] = 1;
   return maybeAutoEnd(state);
 }
 

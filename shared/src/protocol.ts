@@ -30,7 +30,12 @@ export interface C2SEvents {
    * `destinationTileId` 为棋盘格 id（原版 UIN 字符串）。
    * 若目的地路径上存在岔路口，服务端会逐段回 `game:prompt`（`move_branch`）。
    */
-  'game:select_move_card': (payload: { cardId: string; destinationTileId?: string }) => void;
+  'game:select_move_card': (payload: {
+    cardId: string;
+    destinationTileId?: string;
+    /** 掷骰移动牌（如 a022 装腔作势）由客户端先掷骰，把步数发来；服务端写入 customMoveSteps。 */
+    customSteps?: number;
+  }) => void;
   /** 到达建筑后选择打牌 */
   'game:play_card': (payload: { cardId: string; targetPlayerId?: string; targetBuilding?: string }) => void;
   /**

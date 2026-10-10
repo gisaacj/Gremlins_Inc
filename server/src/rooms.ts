@@ -353,9 +353,16 @@ export function attachHandlers(io: SServer, socket: SSocket): void {
   };
 
   socket.on('game:select_move_card', (payload) => {
-    log.info('game:select_move_card cardId=', payload.cardId, 'dest=', payload.destinationTileId);
-    runAction('select_move_card', (_room, state) =>
-      moveWithCard(state, socket.id, payload.cardId, payload.destinationTileId));
+    log.info('game:select_move_card cardId=', payload.cardId, 'dest=', payload.destinationTileId, 'customSteps=', payload.customSteps);
+    runAction('select_move_card', (_room, state) => {
+      // 掷骰移动牌（a022 装腔作势）：客户端先掷骰，把结果作为 customSteps 发来。
+      // 之前服务端忽略此字段，导致 move=0 的特殊移动牌在联机模式走 0 步。
+      if (payload.customSteps != null) {
+        const p = state.players.find((x) => x.id === socket.id);
+        if (p) p.flags['customMoveSteps'] = payload.customSteps;
+      }
+      return moveWithCard(state, socket.id, payload.cardId, payload.destinationTileId);
+    });
   });
 
   socket.on('game:play_card', (payload) => {

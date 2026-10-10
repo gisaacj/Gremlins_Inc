@@ -167,7 +167,9 @@ export function buildEnginePrompt(
     const canPlayAgain = current.flags['canPlayAgain'] === 1;
 
     // === UseCard 阶段：可打一张牌或跳过（无建筑选项）===
-    if (current.cardsPlayedThisTurn === 0 || canPlayAgain) {
+    // 移动用掉 1 张牌（cardsPlayedThisTurn=1），允许再打 1 张效果牌（<=1）。
+    // 之前用 === 0 导致移动后永远进不了 UseCard 阶段，无法在站点打出效果牌。
+    if (current.cardsPlayedThisTurn <= 1 || canPlayAgain) {
       const playable = playableCards(state, viewerId);
       return {
         type: 'play_card_or_skip',

@@ -183,17 +183,15 @@ check('并列最穷也算最穷（翻倍）', () => {
   assert.equal(paid, 100, `并列最穷应翻倍，实际 ${paid}`);
 });
 
-console.log('\n=== 4. 已知未实现的 tag（显式钉住，避免误以为已支持）===');
-// 这些 tag 目前**没有**实现语义，本测试把它们列出来。
-// 若将来实现了，这个清单会失败，提醒更新文档与测试。
-const KNOWN_UNIMPLEMENTED = [
-  ['Permanent', 'a045', '每个对手按各自永久卡数量付款'],
-  ['HaltFailed', 'a179', '付不出则整段不生效'],
-  ['oppmalicepenalty', 'a179', '付不出时的替代罪恶'],
-  ['moneybonus', 'a156', '按收到的齿轮再给钱'],
-  ['malicebonus', 'a156', '按收到的齿轮再给罪恶'],
-];
-check('未实现 tag 清单仍与代码一致（实现后请更新本清单）', () => {
+console.log('\n=== 4. 未实现的 tag 清单 ===');
+// 曾经有 5 个 tag 未实现（Permanent / HaltFailed / oppmalicepenalty /
+// moneybonus / malicebonus），已在 `param-tags2.test.ts` 那一轮补齐，清单清空。
+//
+// 这个检查的意义：**一旦有人新增了对某个 tag 的处理，而清单里还留着它，
+// 测试就会失败**，提醒同步文档与测试，避免"以为没支持、其实支持了"
+// 或反过来"以为支持了、其实没支持"。
+const KNOWN_UNIMPLEMENTED: Array<[string, string, string]> = [];
+check('未实现 tag 清单与代码一致（当前应为空）', () => {
   const src = [
     'shared/src/engine/interp.ts', 'shared/src/engine/permanents.ts',
     'shared/src/engine/abilities.ts', 'shared/src/engine/options.ts',
@@ -202,7 +200,11 @@ check('未实现 tag 清单仍与代码一致（实现后请更新本清单）',
   const nowImplemented = KNOWN_UNIMPLEMENTED.filter(([t]) => src.includes(`'${t}'`));
   assert.equal(nowImplemented.length, 0,
     `以下 tag 已被实现，请从 KNOWN_UNIMPLEMENTED 移除并补测试：${nowImplemented.map((x) => x[0]).join(', ')}`);
-  console.log(`      仍是未实现：${KNOWN_UNIMPLEMENTED.map((x) => `${x[0]}(${x[1]})`).join(', ')}`);
+  if (KNOWN_UNIMPLEMENTED.length === 0) {
+    console.log('      清单为空——已知的语义 tag 均已实现');
+  } else {
+    console.log(`      仍是未实现：${KNOWN_UNIMPLEMENTED.map((x) => `${x[0]}(${x[1]})`).join(', ')}`);
+  }
 });
 
 console.log('\n=== 5. 不变量 ===');

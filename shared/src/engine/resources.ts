@@ -139,6 +139,27 @@ export function hasTag(slots: ParamSlot[], tag: string): boolean {
   return tagsOf(slots).some((t) => t.toLowerCase() === tag.toLowerCase());
 }
 
+/**
+ * 取出紧跟在某个 tag **之后**的那些槽位。
+ *
+ * 原版用「tag 后面跟数值」的方式表达带参数的语义 tag，例如
+ * `OpponentPayScore(1|moneybonus|50|malicebonus|1)`
+ * → `moneybonus` 后面跟 50、`malicebonus` 后面跟 1。
+ * 只靠 `firstNumber` 无法区分这些数值分别属于谁，所以要按 tag 定位。
+ *
+ * 返回从该 tag 之后**直到下一个 tag 之前**的槽位。
+ */
+export function takeTaggedNumbers(slots: ParamSlot[], tag: string): ParamSlot[] {
+  const i = slots.findIndex((s) => s.kind === 'tag' && s.value.toLowerCase() === tag.toLowerCase());
+  if (i < 0) return [];
+  const out: ParamSlot[] = [];
+  for (let k = i + 1; k < slots.length; k++) {
+    if (slots[k].kind === 'tag') break;   // 碰到下一个 tag 就停
+    out.push(slots[k]);
+  }
+  return out;
+}
+
 export function firstId(slots: ParamSlot[]): string | undefined {
   for (const s of slots) if (s.kind === 'id') return s.value;
   return undefined;

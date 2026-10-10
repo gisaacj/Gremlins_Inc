@@ -20,7 +20,8 @@ import { fireAbility } from './abilities.js';
 import { collectButtons } from './dialog.js';
 import { diceTableOf, handleSpecialOutcome, jailTermFor } from './options.js';
 import {
-  addRes, firstId, firstNumber, firstResource, hasTag, parseParams, payAmount, transferRes,
+  addRes, firstId, firstNumber, firstResource, hasTag, parseParams, payAmount,
+  takeTaggedNumbers, transferRes,
   type ParamSlot,
 } from './resources.js';
 
@@ -50,6 +51,17 @@ export interface ActionContext {
   choices?: Record<string, string[]>;
   /** 额外数据槽（选定的地点、卡牌等） */
   scratch?: Record<string, string>;
+  /**
+   * 中止剩余动作的标记（由带 `HaltFailed` 之类的动作设置）。
+   *
+   * 原版有些牌是"要么整段生效、要么整段不生效"：
+   * a179「昂贵的命令」——"该玩家必须支付 {1}$ 才能获得 {2}* 并失去 {3}^。
+   * **如果无法全额支付**：其不会支付或者失去什么，但仅获得 {4}^（不会获得*）。"
+   *
+   * 由于动作是**顺序执行**的（付款 → 加齿轮 → 减齿轮 → 加罪恶），
+   * "整段不生效"必须能把后面的动作一起停掉，所以需要一个显式中止标记。
+   */
+  haltRest?: boolean;
 }
 
 export type RunResult =
@@ -364,6 +376,8 @@ export function runElection(state: EngineState): void {
 export function runActions(state: EngineState, ctx: ActionContext): RunResult {
   let i = ctx.index;
   while (i < ctx.actions.length) {
+    // 有动作要求中止后续（如 a179 的 `HaltFailed`：付不出就整段不生效）
+    if (ctx.haltRest) break;
     const action = ctx.actions[i];
     // 关键：把当前下标写回 ctx，makePending 依赖 ctx.index 记录续跑位置
     ctx.index = i;
@@ -1311,7 +1325,50 @@ function handleResourceLoss(
     return undefined;
   }
 
+  // `Permanent`：按目标**已激活永久卡数量**计费（a045「房产税」）
+  //   「其他玩家每拥有一张当前已激活的永久卡牌，则给你 {1}$。」
+  //   数据 `OpponentPayMoney(Permanent|50)` 的 50 是**每张**永久卡的单价。
+  const permanentPer = hasTag(slots, 'Permanent') ? firstNumber(slots, 0) : 0;
+
+  /** 本动作实际收到的总数（a156 的 moneybonus/malicebonus 要按它结算） */
+  let receivedTotal = 0;
+
   for (const tgt of targetPlayers(state, ctx)) {
+    // ── `HaltFailed` 门控：付不出就**整段不生效** ──
+    //
+    // a179「昂贵的命令」：「该玩家必须支付 {1}$ 才能获得 {2}* 并失去 {3}^。
+    //   如果无法全额支付：其不会支付或者失去什么，但仅获得 {4}^（不会获得*）。」
+    // 数据只写了前半段（付款 → 加齿轮 → 减齿轮 → 加罪恶），
+    // `HaltFailed` 表示"付不出就全都别做"，还要把**后面的动作一起停掉**。
+    if (hasTag(slots, 'HaltFailed')) {
+      const need = firstNumber(slots, 0);
+      if (tgt.res.money < need) {
+        // 「但仅获得 {4}^」——`oppmalicepenalty|3` 里的 3 即替代罪恶
+        const penalty = firstNumber(takeTaggedNumbers(slots, 'oppmalicepenalty'), 0);
+        if (penalty > 0) {
+          addRes(tgt, 'malice', penalty);
+          log(state, tgt.id, `${nameOf(tgt)} 无力支付 ${need} 金钱：仅获得 +${penalty} 罪恶`);
+        } else {
+          log(state, tgt.id, `${nameOf(tgt)} 无力支付 ${need} 金钱：本效果整段不生效`);
+        }
+        ctx.haltRest = true;
+        return undefined;
+      }
+    }
+
+    // `Permanent`：按目标持有的永久卡数量付款，与 `OpponentPayMoney` 同义
+    if (permanentPer > 0) {
+      const count = tgt.permanents?.length ?? 0;
+      if (count > 0) {
+        const r = payAmount(tgt, o, [{ kind: 'number', value: permanentPer * count }],
+          { defaultKey: 'money' });
+        receivedTotal += r.paid;
+        log(state, tgt.id,
+          `${nameOf(tgt)} 有 ${count} 张永久卡，付 ${r.paid} 金钱给 ${nameOf(o)}`);
+      }
+      continue;
+    }
+
     switch (kind) {
       case 'OpponentLoseVotes':
       case 'OpponentLoseScore':
@@ -1351,6 +1408,7 @@ function handleResourceLoss(
         const poorestDouble = hasTag(slots, 'Poorest')
           && o.res.money === Math.min(...state.players.map((x) => x.res.money));
         const r = payAmount(tgt, o, slots, { defaultKey: key, poorestDouble });
+        receivedTotal += r.paid;
         log(state, tgt.id,
           `${nameOf(tgt)} 支付 ${r.paid} ${RES_LABEL[r.key]} 给 ${nameOf(o)}`
           + (poorestDouble ? '（出牌者最穷，金额翻倍）' : ''));
@@ -1394,6 +1452,27 @@ function handleResourceLoss(
         if (!r.full && hasTag(slots, 'Arrest')) arrest(state, tgt, `${ctx.source}：无力足额支付`);
         break;
       }
+    }
+  }
+
+  // ── `moneybonus` / `malicebonus`：按**实际收到**的数量给奖励 ──
+  //
+  // a156「Demon'stration」：「每个玩家给你 {1}*。每收到 1 个 *：你 +{2}$、+{3}^。」
+  // 数据 `OpponentPayScore(1|moneybonus|50|malicebonus|1)`。
+  //
+  // 必须**在循环之后**结算：奖励按"实际到手的齿轮总数"计算，
+  // 而对手可能因为齿轮不足而少给（`payAmount` 会夹取），
+  // 所以不能用名义值（`{1}` × 人数）来算。
+  if (receivedTotal > 0) {
+    const moneyPer = firstNumber(takeTaggedNumbers(slots, 'moneybonus'), 0);
+    const malicePer = firstNumber(takeTaggedNumbers(slots, 'malicebonus'), 0);
+    if (moneyPer > 0) {
+      addRes(o, 'money', moneyPer * receivedTotal);
+      log(state, o.id, `每收到 1 齿轮 +${moneyPer}$：共 ${receivedTotal} → +${moneyPer * receivedTotal}$`);
+    }
+    if (malicePer > 0) {
+      addRes(o, 'malice', malicePer * receivedTotal);
+      log(state, o.id, `每收到 1 齿轮 +${malicePer}^：共 ${receivedTotal} → +${malicePer * receivedTotal}^`);
     }
   }
   return undefined;

@@ -227,6 +227,42 @@ import 了 `interp.ts`，反向依赖会**形成循环**，改为就地一行判
 
 新增测试 `param-tags.test.ts`（14 项）。
 
+### 本轮：补齐上一轮钉住的 5 个语义 tag
+
+上一轮把 5 个未实现 tag 列进 `KNOWN_UNIMPLEMENTED` 清单，这轮按牌面语义全部补齐。
+
+| tag | 卡 | 语义 |
+|---|---|---|
+| `Permanent` | a045「房产税」 | 每个对手按**自己持有的永久卡数量** × 单价（50）付款 |
+| `moneybonus` / `malicebonus` | a156 | **按实际收到的齿轮数**，每 1 个给 +50$ / +1^ |
+| `HaltFailed` / `oppmalicepenalty` | a179「昂贵的命令」 | 付不出则**整段不生效**，改为 +3^ |
+
+三个实现要点：
+
+1. **a156 的奖励必须在循环之后结算**。牌面是"每收到 1 个 \* 你 +50$"，
+   而对手可能齿轮不足导致少给（`payAmount` 会夹取）。用名义值（×人数）
+   会算多。所以 `handleResourceLoss` 里累积 `receivedTotal`，
+   循环结束后再乘系数。
+
+2. **a179 需要"中止后续动作"的能力**。它的动作链是
+   `付款 → 加齿轮 → 减齿轮 → 加罪恶`，"付不出就整段不生效"意味着
+   得把**后面的动作一起停掉**。引擎原本没有这个机制，于是给
+   `ActionContext` 加了 `haltRest` 标记，`runActions` 每轮开头检查。
+
+3. **`takeTaggedNumbers` 新辅助**：原版用「tag 后跟数值」表达带参 tag
+   （`OpponentPayScore(1|moneybonus|50|malicebonus|1)`），
+   只靠 `firstNumber` 分不清数值归属，需要按 tag 定位后续槽位。
+
+`KNOWN_UNIMPLEMENTED` 现在清空。这个清单的价值在实现过程中体现了：
+补齐后**第一次跑测试就失败**并点名了这 5 个 tag，提醒同步文档——
+正是它设计的目的。
+
+新增测试 `param-tags2.test.ts`（15 项）。
+
+⚠️ 写测试时踩到一个坑值得记下：`createState` 会按角色行动顺序
+（`StepOrderNum`）**重排** `state.players`，所以 `st.players[0]` **不是** `p0`。
+必须用 `getPlayer(st, id)` 按 id 取人，否则 setup 会改错对象。
+
 ---
 
 ## 一、重要前提：反编译范围的边界 ⚠️

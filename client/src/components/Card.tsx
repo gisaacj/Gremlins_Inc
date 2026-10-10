@@ -42,6 +42,14 @@ function useCardDisplay(card: ActionCard) {
     rules: displayCardDescription(card),
     name: displayCardName(card),
     flavor: cleanGameText(card.text.flavor ?? ''),
+    /**
+     * 卡面"特殊规则"角标。
+     *
+     * 原版 `CChaosCardForm.cs:757` 就是 `this.SpecialIcon.Active = card.SpecialFlag;`
+     * —— 纯展示用，**不影响任何逻辑**。它提示玩家"这张牌的规则要特别看"
+     * （点开卡牌详情即有完整说明）。
+     */
+    special: card.special === true,
   };
 }
 
@@ -64,6 +72,11 @@ export function Card({ cardId, selected, disabled, highlight, onClick, onLongPre
       {/* 右上角：可用地点 */}
       {d.places.length > 0 && (
         <div className="card-building">{d.places.join('/')}</div>
+      )}
+
+      {/* 「特殊规则」角标（原版 SpecialIcon = SpecialFlag，纯展示） */}
+      {d.special && (
+        <div className="card-special-icon" title="这张牌有特殊规则，点开查看完整说明">⚙</div>
       )}
 
       {/* 中间内容 */}

@@ -282,3 +282,21 @@
   color: var(--color-text-muted);
   font-size: 9px;
 }
+
+/* 「特殊规则」角标 —— 原版 CChaosCardForm 的 SpecialIcon（card.SpecialFlag）。
+   纯展示：提示玩家这张牌的规则需要特别查看，点击卡牌可看完整说明。 */
+.card-special-icon {
+  position: absolute;
+  bottom: 4px;
+  right: 5px;
+  font-size: 11px;
+  line-height: 1;
+  color: #ffd75e;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

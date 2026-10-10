@@ -126,7 +126,10 @@ export function GamePage() {
                       }
                     }}
                   >
-                    <span className="chaos-card-name">{c.name}</span>
+                    <span className="chaos-card-name">
+                      {CHAOS_CARDS.find((x) => x.id === c.id)?.special === true ? '⚙ ' : ''}
+                      {c.name}
+                    </span>
                     <span className="chaos-cost">{c.cost} → {c.gain}</span>
                     {!c.playable && c.reason && (
                       <span className="option-reason">{c.reason}</span>

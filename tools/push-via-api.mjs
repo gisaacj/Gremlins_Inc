@@ -64,13 +64,24 @@ const api = async (method, path, body) => {
 
 const HEAD = arg('head', git('rev-parse', 'HEAD'));
 
-// 待推送的提交（旧的在前），保证 parent 顺序正确
-const commits = git('rev-list', '--reverse', `${BASE}..${HEAD}`).split('\n').filter(Boolean);
-if (!commits.length) {
-  console.log('没有待推送的提交');
-  process.exit(0);
+// --single：不管本地与 base 有无共同祖先，直接把 HEAD 的**完整 tree**
+// 作为一个新提交挂到 base 下。
+//
+// 这是必要的，因为 Git Data API 推送会**重建对象** → 远端会得到一个本地
+// 不存在的 commit sha。而 github.com 不通时又无法 fetch 回来，
+// 于是"本地 ancestry"与"远端 ancestry"会永久错位。
+// `--single` 绕开祖先关系，只看内容（内容正确性靠 tree 比对保证）。
+const SINGLE = argv.includes('--single');
+
+if (!SINGLE) {
+  // 待推送的提交（旧的在前），保证 parent 顺序正确
+  const commits = git('rev-list', '--reverse', `${BASE}..${HEAD}`).split('\n').filter(Boolean);
+  if (!commits.length) {
+    console.log('没有待推送的提交');
+    process.exit(0);
+  }
+  console.log(`基准 ${BASE.slice(0, 7)} → 待推送 ${commits.length} 个提交`);
 }
-console.log(`基准 ${BASE.slice(0, 7)} → 待推送 ${commits.length} 个提交`);
 
 /** 上传一个 tree（递归），返回新 tree sha */
 const uploadTree = async (treeSha) => {
@@ -109,6 +120,19 @@ const uploadTree = async (treeSha) => {
   const created = await api('POST', `/repos/${REPO}/git/trees`, { tree: out });
   return created.sha;
 };
+
+// --single 模式：把 HEAD 的完整 tree 作为**一个**新提交挂到 BASE 下
+if (SINGLE) {
+  console.log(`单提交模式：把 HEAD(${HEAD.slice(0, 7)}) 的 tree 挂到 ${BASE.slice(0, 7)} 下`);
+  const msg = git('log', '-1', '--pretty=%B', HEAD);
+  const newTree = await uploadTree(git('rev-parse', `${HEAD}^{tree}`));
+  const c = await api('POST', `/repos/${REPO}/git/commits`, {
+    message: msg, tree: newTree, parents: [BASE],
+  });
+  await api('PATCH', `/repos/${REPO}/git/refs/heads/${BRANCH}`, { sha: c.sha, force: false });
+  console.log(`✓ 已更新 ${BRANCH} → ${c.sha}`);
+  process.exit(0);
+}
 
 let parent = BASE;
 for (const sha of commits) {

@@ -654,8 +654,12 @@ function execAction(
     // ============ 回合流程 ============
     case 'AddTurn': {
       const o = owner(state, ctx);
-      o.extraTurns += 1;
-      log(state, o.id, `${ctx.source}：获得 1 次额外走牌`);
+      // `ActionParams[0]` 是**次数**，且可以为负。
+      // m038「…」用的是 `AddTurn(-1)` = **减少** 1 次额外走牌；
+      // 旧实现写死 `+= 1`，会把"减一次"变成"加一次"（方向反了）。
+      const n = firstNumber(slots, 0) || 1;
+      o.extraTurns = Math.max(0, o.extraTurns + n);
+      log(state, o.id, `${ctx.source}：${n >= 0 ? `获得 ${n}` : `失去 ${-n}`} 次额外走牌`);
       return undefined;
     }
     case 'PlayExtraCard': {
@@ -1264,9 +1268,18 @@ function handleResourceLoss(
           : kind === 'OpponentLoseMalice' ? 'malice'
           : 'income';
         const amount = firstNumber(slots, 0);
+        // ⚠️ 负参数 = **获得**，不是忽略。
+        // 卡牌数据用 `OpponentLoseXxx(-N)` 表达"目标 +N"，
+        // 例如 a074「魔幻饰品」移动时 `OpponentLoseMoney(-20)` 即 +20$，
+        // a017 `OpponentLoseMalice(-1)` 即 +1^。
+        // 旧实现写成 `if (amount > 0)`，于是这些"获得"分支被整体静默丢弃。
+        if (amount === 0) break;
         if (amount > 0) {
           const lost = -addRes(tgt, key, -amount);
           log(state, tgt.id, `${nameOf(tgt)} 失去 ${lost} ${RES_LABEL[key]}`);
+        } else {
+          const got = addRes(tgt, key, -amount);
+          log(state, tgt.id, `${nameOf(tgt)} 获得 ${got} ${RES_LABEL[key]}`);
         }
         break;
       }
@@ -1289,6 +1302,16 @@ function handleResourceLoss(
         // 「失去」不是「支付」：钱不进任何人口袋，直接蒸发。
         // 之前把 payee 传成 ctx 的 owner —— 而厄运牌的 ownerId/targets 都是自己，
         // 于是 transferRes 把钱"转给自己"，净变化为 0（`-{1}$` 分支完全没生效）。
+        //
+        // ⚠️ 负参数 = **获得**（`OpponentLoseMoney(-20)` 即目标 +20$）。
+        // `transferRes` 会把负数夹成 0，所以负值必须走 `addRes` 而不是 `payAmount`，
+        // 否则 a074/a150 这类"移动时 +N$"的卡会被静默丢弃。
+        const negAmount = firstNumber(slots, 0);
+        if (negAmount < 0) {
+          const got = addRes(tgt, 'money', -negAmount);
+          log(state, tgt.id, `${nameOf(tgt)} 获得 ${got} ${RES_LABEL.money}`);
+          break;
+        }
         const r = payAmount(tgt, undefined, slots, { defaultKey: 'money' });
         log(state, tgt.id, `${nameOf(tgt)} 失去 ${r.paid} ${RES_LABEL[r.key]}`);
         if (!r.full && hasTag(slots, 'Arrest')) arrest(state, tgt, `${ctx.source}：无力足额支付`);

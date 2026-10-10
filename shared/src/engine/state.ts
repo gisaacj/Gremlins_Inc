@@ -417,6 +417,29 @@ export function startMove(
   // 「停止」（免厄运）都要先于结算生效。印花税等即时收益也在这里结算。
   fireAbility(state, p.id, 'afterMove', { steps: path.length, cellId: p.cellId });
 
+  // 「用这张卡**移动**」触发的规则（卡牌说明里的 `[m]` 段）。
+  //
+  // 原版把两种用法写在同一张卡的 ActionList 里，用 `MOVE` 分隔；
+  // 生成数据时已把 `MOVE` 之后的动作抽到 `card.moveActions`。
+  // 这一段**必须在这里执行**——它是在"用这张牌走路"时结算的，
+  // 与"在站点把牌打出"完全不同的时机。
+  //
+  // 例：a015「永动机」移动时 -20$；a076 移动时跳过 1 回合；a031 可逆行。
+  if (card.moveActions?.length) {
+    const r = runActions(state, {
+      actions: card.moveActions,
+      index: 0,
+      targets: [p.id],
+      ownerId: p.id,
+      source: `「${card.text.name}」移动效果`,
+      sourceCardId: card.id,
+    });
+    if (r.status === 'pending') {
+      state.pending = r.pending;
+      return { ok: true, path, pending: r.pending };
+    }
+  }
+
   // pass-through 只结算途经格（不含终点——终点由 landing 处理）
   resolvePassThrough(state, p, path.slice(0, -1), mvFlags);
   // 终点格效果在 Move 阶段立即结算（站点效果：收入/贿赂/警察/厄运/冒险/地狱）

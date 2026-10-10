@@ -356,13 +356,15 @@ export function skipPlay(state: EngineState, playerId: string): ActionResult {
   if (!isTurn(state, playerId)) return fail('不是你的回合');
   if (state.pending) return fail('有未完成的决策');
 
-  // 结算欠着的格子效果（若已离开该格则自动跳过）
-  const cellPending = finishTurnActions(state);
-  if (cellPending) return ok(cellPending);
-  if (state.pending) return ok(state.pending);
-
+  // 站点效果（UseCell）由 `nextTurn` 统一结算 —— 这样"结束回合"按钮
+  // 与"不出牌"走的是同一条路径，不会再出现"站点效果被跳过"（bug #2）。
   const r = nextTurn(state);
-  return r.ok ? ok() : fail(r.error ?? '换人失败');
+  if (!r.ok) {
+    // 站点效果自己挂起了（买保险/付贿赂/须决策）→ 交回给玩家处理
+    if (state.pending) return ok(state.pending);
+    return fail(r.error ?? '换人失败');
+  }
+  return ok();
 }
 
 // ---------------------------------------------------------------- 混沌卡
@@ -616,9 +618,28 @@ export function jailTurn(state: EngineState, playerId: string): ActionResult {
 }
 
 // ---------------------------------------------------------------- 回合流转
-/** 结束当前回合，交给下一位；返回是否已分出胜负 */
+/**
+ * 结束当前回合，交给下一位；返回是否已分出胜负。
+ *
+ * ⚠️ **这里会先结算"欠着的站点效果（UseCell）"**。
+ *
+ * 原先不结算，而客户端的「结束回合」按钮正好走这条路（`game:end_turn`
+ * → `nextTurn`），于是玩家一点结束回合，本站效果就**被静默跳过** ——
+ * 收入格不给钱、贿赂格不扣钱、警察格不问话、地狱不扣 100。
+ * 用户报的"建筑站点经常概率性地不生效"就是它：走「不出牌/结束回合」
+ * 就会跳，走别的路径才生效，看起来像随机的（bug #2、#6 同源）。
+ *
+ * 把结算放进 `nextTurn` 本身，任何调用方都无法再绕过。
+ */
 export function nextTurn(state: EngineState): { ok: boolean; error?: string; gameOver: boolean } {
   if (state.pending) return { ok: false, error: '有未完成的决策', gameOver: false };
+
+  // 结算欠着的站点效果；若它自己挂起（买保险/付贿赂/须决策），把回合交还给玩家
+  const cellPending = finishTurnActions(state);
+  if (cellPending || state.pending) {
+    return { ok: false, error: '站点效果待结算', gameOver: false };
+  }
+
   endTurn(state);
   return { ok: true, gameOver: state.phase === 'game_over' };
 }

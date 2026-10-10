@@ -469,8 +469,11 @@ function optionUsedKey(optionId: string): string {
   return `optUsed:${optionId}`;
 }
 
-/** 该可选动作本回合是否已用过 */
+/** 该可选动作本回合是否已用过。
+ * 原版规则：每次到访只能用一个可选动作——用了一个，该格所有动作都不可再选 */
 export function optionUsedThisTurn(p: EnginePlayer, optionId: string): boolean {
+  // 检查该格是否已用过任何动作
+  if (p.flags['optUsed:cell'] === 1) return true;
   return p.flags[optionUsedKey(optionId)] === 1;
 }
 
@@ -532,6 +535,8 @@ export function doOption(
   // 几百次能滚出两万以上）。
   const doneUsed = (message: string): OptionResult => {
     p.flags[optionUsedKey(optionId)] = 1;
+    // 原版规则：每格每次到访只能做一个动作——标记整格已用
+    p.flags['optUsed:cell'] = 1;
     return done(message);
   };
 

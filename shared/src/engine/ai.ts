@@ -83,7 +83,8 @@ export class AIPlayer {
       }
 
       // 2) 可选动作：只在明显有利时做（投资回本、卖资源、打工…）
-      //    每回合只试一次，避免 tryOption 返回 ok 但无实际变化时死循环
+      //    原版规则：用建筑可选动作 = 结束本回合
+      //    runOption 成功后内部调 nextTurn，循环会因 isTurn=false 而 break
       if (!triedOption && this.tryOption(state, playerId)) {
         log.push({ playerId, action: 'choose', detail: '可选动作' });
         n++;

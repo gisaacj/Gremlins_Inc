@@ -1167,6 +1167,32 @@ function handleSelect(
         }
         return undefined;
       }
+      // params 可能是 cellType ID（十六进制），需要转换后查格子
+      const cellTypeIds = slots
+        .filter((s) => s.kind === 'id')
+        .map((s) => s.value)
+        .filter(Boolean);
+      if (cellTypeIds.length > 0 && !pre) {
+        // 把 hex cellType ID 转成 decimal，找棋盘上对应类型的格子
+        const destCells: { id: string; label: string }[] = [];
+        for (const hex of cellTypeIds) {
+          let dec: string;
+          try { dec = BigInt('0x' + hex).toString(); } catch { dec = hex; }
+          const cells = getMap(state).cells.filter((c) => c.cellTypeId === dec);
+          for (const cell of cells) {
+            destCells.push({ id: cell.id, label: cellLabel(cell) });
+          }
+        }
+        if (destCells.length === 1) {
+          o.cellId = destCells[0].id;
+          log(state, o.id, `传送到 ${destCells[0].label}`);
+          return undefined;
+        }
+        if (destCells.length > 1) {
+          return makePending(ctx, kind, '选择传送目的地',
+            destCells.map((d) => ({ value: d.id, label: d.label })));
+        }
+      }
       const dest = firstId(slots) ?? ctx.scratch?.placeId;
       if (dest) {
         o.cellId = dest;

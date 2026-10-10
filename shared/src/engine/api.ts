@@ -407,7 +407,13 @@ export function runOption(
   const p = getPlayer(state, playerId);
   if (!p) return fail('玩家不存在');
   if (!isTurn(state, playerId)) return fail('不是你的回合');
-  return doOption(state, playerId, optionId, targetId);
+  const r = doOption(state, playerId, optionId, targetId);
+  // 原版规则：用建筑可选动作 = 结束本回合（不能同时打牌）
+  if (r.ok && !r.needsTarget) {
+    const nr = nextTurn(state);
+    if (!nr.ok) return { ok: false, error: nr.error };
+  }
+  return r;
 }
 
 // ---------------------------------------------------------------- 决策应答

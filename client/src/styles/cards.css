@@ -29,7 +29,8 @@
   flex-direction: column;
 }
 
-/* 卡牌背景色：白=普通 蓝=秘密 红=罪恶 */
+/* 卡牌背景色：白=普通 蓝=秘密 红=罪恶 金=永久 */
+/* theme-* 只影响边框高亮，不覆盖背景——背景由 card-bg-* 决定 */
 .card-bg-regular {
   background: linear-gradient(160deg, #faf8f0, #e8e4d8);
   border-color: #c8c0a8;
@@ -45,12 +46,11 @@
   border-color: #b02828;
   color: #f0d8d8;
 }
-
-/* 兼容旧 theme class */
-.card.theme-gold { background: linear-gradient(160deg, #faf8f0, #e8e4d8); border-color: #c8c0a8; color: #2a2a2a; }
-.card.theme-crime { background: linear-gradient(160deg, #5a1818, #2a0808); border-color: #b02828; color: #f0d8d8; }
-.card.theme-office { background: linear-gradient(160deg, #2a4a7a, #152a4a); border-color: #4a7abf; color: #e0e8f0; }
-.card.theme-neutral { background: var(--color-panel); }
+.card-bg-permanent {
+  background: linear-gradient(160deg, #4a3a00, #2a1f00);
+  border-color: #f5b800;
+  color: #f0e8c0;
+}
 
 .card:hover {
   transform: translateY(-8px);

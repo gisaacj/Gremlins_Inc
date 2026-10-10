@@ -44,7 +44,7 @@ export function Card({ cardId, selected, disabled, onClick, onLongPress }: CardP
 
   return (
     <div
-      className={`card theme-${d.theme} ${d.bg} ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}`}
+      className={`card ${d.bg} ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}`}
       onClick={disabled ? undefined : onClick}
       onDoubleClick={onLongPress}
     >
@@ -92,7 +92,7 @@ export function CardDetail({
 
   return (
     <div className="card-detail-overlay" onClick={onClose}>
-      <div className={`card-detail theme-${d.theme} ${d.bg}`} onClick={(e) => e.stopPropagation()}>
+      <div className={`card-detail ${d.bg}`} onClick={(e) => e.stopPropagation()}>
         <div className="card-detail-header">
           <span className="card-detail-move">移动 {card.move}</span>
           {d.places.length > 0 && (

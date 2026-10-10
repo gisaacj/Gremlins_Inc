@@ -514,6 +514,113 @@ export function resolvePending(
     return resolveMoveBranch(state, playerId, answer[0]);
   }
 
+  // 弃牌移动（a059 二手货）：玩家选了对手，随机弃对手一张牌，
+  // 以该牌 MovePoints 为步数，再给对手补 1 张
+  if (pending.kind.startsWith('discardMove:')) {
+    const moveCardId = pending.kind.slice('discardMove:'.length);
+    const opponentId = answer[0];
+    const opponent = state.players.find((x) => x.id === opponentId);
+    if (!opponent) return { ok: false, reason: '对手不存在' };
+    if (opponent.hand.length === 0) return { ok: false, reason: '对手没有手牌' };
+
+    // 随机弃对手一张牌
+    const rIdx = Math.floor(random(state) * opponent.hand.length);
+    const stolenId = opponent.hand[rIdx];
+    opponent.hand.splice(rIdx, 1);
+    state.discard.push(stolenId);
+    // 给对手补 1 张
+    drawTo(state, opponent, 1);
+
+    const stolen = CARD_BY_ID[stolenId];
+    const steps = stolen?.move ?? 0;
+    if (steps <= 0) {
+      // 弃出的牌没有移动点数 → 步数为 0，仍完成移动（卡牌已消耗）
+      pushLog(state, playerId, `二手货：弃对手 ${opponent.name} 的「${stolen?.text.name ?? stolenId}」，无移动点数`);
+    } else {
+      pushLog(state, playerId, `二手货：弃对手 ${opponent.name} 的「${stolen?.text.name ?? stolenId}」，移动 ${steps} 步`);
+    }
+    const player = getPlayer(state, playerId);
+    if (!player) return { ok: false, reason: '玩家不存在' };
+    player.flags['customMoveSteps'] = steps;
+
+    state.pending = undefined;
+
+    // 记录目的地，让移动循环在中途建筑可提前停止
+    const dest = pending.resume.scratch?.destinationTileId;
+    const result = startMove(state, playerId, moveCardId);
+    if (result.ok && state.moveCursor && dest) {
+      state.moveCursor.destTileId = dest;
+    }
+    return result;
+  }
+
+  // 冒险格（有保险）掷到 1：选对手抽厄运
+  if (pending.kind.startsWith('dangerTarget:')) {
+    const pid = pending.kind.slice('dangerTarget:'.length);
+    const actor = getPlayer(state, pid);
+    state.pending = undefined;
+    if (!actor) return { ok: false, reason: '玩家不存在' };
+    const target = state.players.find((x) => x.id === answer[0]);
+    if (!target) return { ok: false, reason: '对手不存在' };
+    drawMisfortune(state, target);
+    pushLog(state, actor.id, `冒险格：对手 ${target.name} 抽厄运牌`);
+    return { ok: true };
+  }
+
+  // 冒险格：买保险 or 不买 → 掷骰 → 扔到 1 触发厄运
+  if (pending.kind.startsWith('danger:')) {
+    const pid = pending.kind.slice('danger:'.length);
+    const actor = getPlayer(state, pid);
+    state.pending = undefined;
+    if (!actor) return { ok: false, reason: '玩家不存在' };
+    const cost = Number(state.pendingInput?.[pending.kind] ?? 40);
+
+    // 1) 处理保险选择
+    if ((answer[0] ?? '') === 'insure' && actor.res.money >= cost) {
+      addRes(actor, 'money', -cost);
+      actor.flags['insured'] = 1;
+      pushLog(state, actor.id, `冒险格：购买保险 ${cost} 金钱`);
+    } else {
+      pushLog(state, actor.id, '冒险格：不买保险');
+    }
+
+    // 2) 掷骰
+    const dice = rollDice(state);
+    state.lastRoll = dice;
+    if (dice === 1) {
+      if (actor.flags['insured']) {
+        // 有保险：选对手抽厄运
+        const opponents = state.players.filter(
+          (x) => x.id !== actor.id && !x.inJail,
+        );
+        if (!opponents.length) {
+          drawMisfortune(state, actor);
+          pushLog(state, actor.id, '冒险格掷出 1（有保险但无对手可选）：自己抽厄运');
+          return { ok: true };
+        }
+        pushLog(state, actor.id, '冒险格掷出 1（有保险）：选择对手抽厄运');
+        const dangerTarget: PendingChoice = {
+          kind: `dangerTarget:${actor.id}`,
+          playerId: actor.id,
+          prompt: '冒险格（有保险）：选择一名对手抽厄运牌',
+          options: opponents.map((o) => ({ value: o.id, label: o.name })),
+          min: 1,
+          max: 1,
+          resume: { actions: [], index: 0, targets: [actor.id], source: '冒险格', ownerId: actor.id },
+        };
+        state.pending = dangerTarget;
+        return { ok: true, pending: dangerTarget };
+      } else {
+        // 无保险：自己抽厄运
+        drawMisfortune(state, actor);
+        pushLog(state, actor.id, '冒险格掷出 1（无保险）：自己抽厄运');
+        return { ok: true };
+      }
+    }
+    pushLog(state, actor.id, `冒险格掷出 ${dice}：平安无事`);
+    return { ok: true };
+  }
+
   // 警察格：付贿赂 or 掷骰（不走动作解释器）
   if (pending.kind.startsWith('police:')) {
     const pid = pending.kind.slice('police:'.length);
@@ -741,8 +848,31 @@ function resolveLanding(state: EngineState, p: EnginePlayer): PendingChoice | un
         resume: { actions: [], index: 0, targets: [p.id], source: '警察格', ownerId: p.id },
       };
     }
+    case 'Danger': {
+      // 冒险格（Danger）：强制弹窗——买保险？然后掷骰，
+      // 扔到 1 时：有保险 → 选对手抽厄运；无保险 → 自己抽厄运。
+      // OptionalFlag=false，落地即触发（不走可选动作）。
+      if (p.flags['ignoreCell']) break;
+      const cost = cellType.params[0] ?? 40;
+      const canPay = p.res.money >= cost;
+      pushLog(state, p.id, `冒险格：可花 ${cost} 金钱买保险`);
+      state.pendingInput = { ...(state.pendingInput ?? {}), [`danger:${p.id}`]: String(cost) };
+      return {
+        kind: `danger:${p.id}`,
+        playerId: p.id,
+        prompt: `冒险格：是否花 ${cost} 金钱买保险？（掷到 1 时有保险可转嫁厄运给对手）`,
+        options: [
+          { value: 'insure', label: canPay ? `买保险（${cost} 金钱）` : `买保险（需 ${cost} 金钱，不足）` },
+          { value: 'skip', label: '不买保险' },
+        ],
+        min: 1,
+        max: 1,
+        resume: { actions: [], index: 0, targets: [p.id], source: '冒险格', ownerId: p.id },
+      };
+    }
     case 'Risk': {
-      pushLog(state, p.id, `冒险格（可购买保险，费用 ${cellType.params[1] ?? 40}）`);
+      // 风险格（赌博站）：可选掷骰，不在落地时自动掷。
+      // 保险只对冒险格（Danger）生效，此处不检查。
       break;
     }
      // Tribune（演讲格）是 OptionalFlag=true，只有可选动作给选票，不停留不自动给

@@ -17,8 +17,9 @@ import { playEffectCard } from './state.js';
 import { discardPermanent } from './permanents.js';
 import { addRes } from './resources.js';
 import { runActions } from './interp.js';
-import { rollDice } from './interp.js';
+import { rollDice, drawTo } from './interp.js';
 import { availableOptions, doOption, type OptionSpec } from './options.js';
+import { isDiscardMoveCard } from '../board-view.js';
 
 export type { EngineInitArgs };
 
@@ -107,6 +108,34 @@ export function moveWithCard(
   const card = CARD_BY_ID[cardId]!;
   if (destinationTileId && !getCell(state, destinationTileId)) return fail('目的地不存在');
 
+  // 弃牌移动牌（a059 二手货）：move=0，选一个对手，随机弃其一张牌，
+  // 以该牌 MovePoints 为步数，再给对手补 1 张。
+  // 若 customMoveSteps 已设（由 discardMoveCard 或 AI 预设），则直接走。
+  if (isDiscardMoveCard(cardId) && p.flags['customMoveSteps'] == null) {
+    const opponents = state.players.filter(
+      (x) => x.id !== playerId && !x.inJail && x.hand.length > 0,
+    );
+    if (!opponents.length) return fail('没有可选择的对手');
+    const pending: PendingChoice = {
+      kind: `discardMove:${cardId}`,
+      playerId,
+      prompt: '选择一名对手：随机弃其一张牌，以该牌移动点数行走',
+      options: opponents.map((o) => ({ value: o.id, label: o.name })),
+      min: 1,
+      max: 1,
+      resume: {
+        actions: [],
+        index: 0,
+        targets: [],
+        source: '二手货',
+        ownerId: playerId,
+        scratch: destinationTileId ? { destinationTileId } : undefined,
+      },
+    };
+    state.pending = pending;
+    return ok(pending);
+  }
+
   // 掷骰移动牌的步数（从 player.flags 读取，由 rollMoveDice 设置）
   const effectiveSteps = p.flags['customMoveSteps'] ?? card.move;
 
@@ -142,6 +171,50 @@ export function rollMoveDice(state: EngineState, playerId: string): number {
   if (p) p.flags['customMoveSteps'] = dice;
   state.lastRoll = dice;
   return dice;
+}
+
+/**
+ * 弃牌移动牌（a059 二手货）：选一名对手，随机弃其一张牌，
+ * 以该牌 MovePoints 作为移动步数，再给对手补 1 张。
+ *
+ * 原版流程：选牌 → 选对手 → 随机弃对手一张牌 → 以该牌移动点数走 → 对手补 1 张。
+ * 这里在 moveWithCard 之前调用，把结果写入 player.flags['customMoveSteps']，
+ * 然后 moveWithCard 检测到该 flag 已设，直接走 startMove。
+ */
+export function discardMoveCard(
+  state: EngineState,
+  playerId: string,
+  cardId: string,
+  opponentId: string,
+  destinationTileId?: string,
+): ActionResult {
+  const p = getPlayer(state, playerId);
+  if (!p) return fail('玩家不存在');
+  if (!isTurn(state, playerId)) return fail('不是你的回合');
+  if (state.pending) return fail('有未完成的决策');
+
+  const chk = canMoveWithCard(p, cardId);
+  if (!chk.ok) return fail(chk.reason ?? '不能用于移动');
+
+  const opponent = state.players.find((x) => x.id === opponentId);
+  if (!opponent) return fail('对手不存在');
+  if (opponent.id === playerId) return fail('不能选择自己');
+  if (opponent.hand.length === 0) return fail('对手没有手牌');
+
+  // 随机弃对手一张牌
+  const rIdx = Math.floor(Math.random() * opponent.hand.length);
+  const stolenId = opponent.hand[rIdx];
+  opponent.hand.splice(rIdx, 1);
+  state.discard.push(stolenId);
+  // 给对手补 1 张
+  drawTo(state, opponent, 1);
+
+  const stolen = CARD_BY_ID[stolenId];
+  const steps = stolen?.move ?? 0;
+  p.flags['customMoveSteps'] = steps;
+  state.lastRoll = undefined;
+
+  return moveWithCard(state, playerId, cardId, destinationTileId);
 }
 
 /**

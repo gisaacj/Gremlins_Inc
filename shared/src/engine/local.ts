@@ -15,6 +15,7 @@ import {
   isTurn, jailTurn, listOptions, moveWithCard, nextTurn, playCard, playChaosCard,
   runOption, skipPlay,
 } from './api.js';
+import { discardMoveCard } from './api.js';
 import { buildEnginePrompt, serializeEngineState } from './serialize.js';
 import { createState } from './state.js';
 import type { EngineInitArgs } from './state.js';
@@ -96,6 +97,11 @@ export class LocalGame {
   /** 用卡移动（可带目的地；岔路由引擎按目的地自动选） */
   move(playerId: string, cardId: string, destinationTileId?: string) {
     return moveWithCard(this.state, playerId, cardId, destinationTileId);
+  }
+
+  /** 弃牌移动（a059 二手货）：选对手，随机弃其一张牌，以其移动点数为步数 */
+  discardMove(playerId: string, cardId: string, opponentId: string, destinationTileId?: string) {
+    return discardMoveCard(this.state, playerId, cardId, opponentId, destinationTileId);
   }
 
   /** 在当前地点打出效果卡 */

@@ -675,6 +675,9 @@ function execAction(
       return undefined;
     }
     case 'Discard': {
+      // "Move" 关键字：仅用于移动流程（弃牌/掷骰决定步数），
+      // 在效果结算中不执行任何弃牌。
+      if (hasTag(slots, 'Move')) return undefined;
       const o = owner(state, ctx);
       const n = firstNumber(slots, o.hand.length) || o.hand.length;
       const dropped = n >= o.hand.length

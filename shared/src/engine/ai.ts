@@ -17,8 +17,9 @@ import {
   answerChoice, chaosOptions, currentPlayerId, isTurn, jailTurn, listOptions, movableCards,
   nextTurn, playableCards, playCard, playChaosCard, runOption, rollMoveDice,
 } from './api.js';
-import { moveWithCard } from './api.js';
+import { moveWithCard, discardMoveCard } from './api.js';
 import { canMoveWithCard } from './state.js';
+import { isDiceMoveCard, isDiscardMoveCard } from '../board-view.js';
 
 /** 取当前格子的第 n 个参数（可选动作的数值） */
 function cellTypeParam(state: EngineState, p: { cellId: string }, i: number, fallback: number): number {
@@ -131,7 +132,12 @@ export class AIPlayer {
       // 5) 移动：选择能让 AI 打出高分效果牌的目的地，其次收集资源。
       const bestMove = this.findBestMove(state, playerId);
       if (bestMove) {
-        const r = moveWithCard(state, playerId, bestMove.cardId, bestMove.dest);
+        let r: { ok: boolean; error?: string; pending?: import('./model.js').PendingChoice };
+        if (bestMove.discardCardId) {
+          r = discardMoveCard(state, playerId, bestMove.cardId, bestMove.discardCardId, bestMove.dest);
+        } else {
+          r = moveWithCard(state, playerId, bestMove.cardId, bestMove.dest);
+        }
         log.push({
           playerId, action: 'move',
           detail: `${CARD_BY_ID[bestMove.cardId]?.name ?? bestMove.cardId}→${bestMove.destLabel ?? ''}${r.ok ? '' : ` 失败:${r.error}`}`,
@@ -309,7 +315,7 @@ export class AIPlayer {
   private findBestMove(
     state: EngineState,
     playerId: string,
-  ): { cardId: string; dest: string | undefined; destLabel: string } | undefined {
+  ): { cardId: string; dest: string | undefined; destLabel: string; discardCardId?: string } | undefined {
     const me = getPlayer(state, playerId);
     if (!me) return undefined;
 
@@ -320,18 +326,30 @@ export class AIPlayer {
     let bestDest: string | undefined = undefined;
     let bestLabel = '';
     let bestVal = -Infinity;
+    let bestDiscard: string | undefined = undefined;
 
     for (const cardId of movable) {
       const card = CARD_BY_ID[cardId];
       if (!card) continue;
-      // 特殊移动牌（move=0 + specialMove）：用掷骰结果，跳过 move<=0 的非特殊牌
-      const isDiceMove = card.move === 0 && card.specialMove === true;
-      if (card.move <= 0 && !isDiceMove) continue;
+
+      const diceMove = isDiceMoveCard(cardId);
+      const discardMove = isDiscardMoveCard(cardId);
+      if (card.move <= 0 && !diceMove && !discardMove) continue;
 
       // 掷骰移动牌：先掷骰拿到步数，再 BFS
+      // 弃牌移动牌：选一个对手，以其随机弃牌的 MovePoints 估算步数
       let steps = card.move;
-      if (isDiceMove) {
+      let discardCardId: string | undefined;
+      if (diceMove) {
         steps = rollMoveDice(state, playerId);
+      } else if (discardMove) {
+        const opp = this.findBestOpponent(state, me);
+        if (!opp) continue;
+        discardCardId = opp;
+        // 用对手手牌的平均移动点数估算步数
+        const opp2 = state.players.find((x) => x.id === opp);
+        const moves = opp2?.hand.map((id) => CARD_BY_ID[id]?.move ?? 0).filter((m) => m > 0) ?? [];
+        steps = moves.length ? Math.round(moves.reduce((a, b) => a + b, 0) / moves.length) : 0;
       }
 
       const reach = this.reachableCells(state, me.cellId, steps);
@@ -347,12 +365,32 @@ export class AIPlayer {
           bestCard = cardId;
           bestDest = cellId;
           bestLabel = cellLabelShort(state, cellId);
+          bestDiscard = discardCardId;
         }
       }
     }
 
     if (!bestCard) return undefined;
-    return { cardId: bestCard, dest: bestDest, destLabel: bestLabel };
+    return { cardId: bestCard, dest: bestDest, destLabel: bestLabel, discardCardId: bestDiscard };
+  }
+
+  /**
+   * 为弃牌移动牌选最佳对手：手牌多、平均移动点数高的优先。
+   */
+  private findBestOpponent(state: EngineState, me: EnginePlayer): string | undefined {
+    let best: string | undefined;
+    let bestScore = -Infinity;
+    for (const opp of state.players) {
+      if (opp.id === me.id || opp.inJail || opp.hand.length === 0) continue;
+      const moves = opp.hand.map((id) => CARD_BY_ID[id]?.move ?? 0).filter((m) => m > 0);
+      const avg = moves.length ? moves.reduce((a, b) => a + b, 0) / moves.length : 0;
+      const score = avg * 2 + opp.hand.length * 0.5;
+      if (score > bestScore) {
+        bestScore = score;
+        best = opp.id;
+      }
+    }
+    return best;
   }
 
   /**

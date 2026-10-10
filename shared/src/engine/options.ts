@@ -332,23 +332,9 @@ function stationOptions(
       break;
     }
 
-    // 冒险：买保险（原版必选，此处作为可选动作展示，不选则视为不买）
-    case 'Danger': {
-      let cost = pr[0] || 40;
-      for (const a of abilitiesOf(p)) {
-        if (a.flag === 'insuranceDiscount') cost = a.nums?.[0] ?? 10;
-      }
-      out.push({
-        id: 'danger.insure',
-        label: `买保险 ${cost} 金`,
-        description,
-        affordable: p.res.money >= cost,
-        reason: p.res.money >= cost ? undefined : `需要 ${cost} 金钱`,
-      });
-      break;
-    }
+    // 冒险格（Danger）：落地时强制弹窗处理保险+掷骰，不在此处展示可选动作
 
-    // 风险（赌博格）：掷骰试手气
+    // 风险格（赌博站）：可选掷骰试手气
     case 'Risk': {
       out.push({ id: 'risk.gamble', label: '试手气（掷骰）', description });
       break;
@@ -704,17 +690,7 @@ export function doOption(
         : `掷出 ${dice}（需 ≥${need}），演讲失败，损失 ${amt} 金`);
     }
 
-    case 'danger': {
-      let cost = pr[0] || 40;
-      for (const a of abilitiesOf(p)) {
-        if (a.flag === 'insuranceDiscount') cost = a.nums?.[0] ?? 10;
-      }
-      if (p.res.money < cost) return fail(`需要 ${cost} 金钱`);
-      addRes(p, 'money', -cost);
-      p.flags['insured'] = 1;
-      logIt(`购买保险 ${cost} 金`);
-      return doneUsed(`已购买保险（${cost} 金）`);
-    }
+    // danger 的可选动作已移除——改为落地强制弹窗（见 state.ts resolveLanding）
 
     case 'risk': {
       // 赌博格：1 = 厄运，2 = 扣钱，3 = 扣选票并加罪恶，4~6 = 加钱

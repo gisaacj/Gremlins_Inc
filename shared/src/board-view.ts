@@ -124,49 +124,45 @@ export function buildBoardView(map: BoardMap, layout: BoardLayout): BoardViewDat
 }
 
 /**
- * 调整格子坐标，解决全挤在一个圆上的问题。
- * 三层布局：建筑外圈(r≥60)、站点环(r=38-46)、枢纽内圈(r≤18)
+ * 调整格子坐标：在原始环状布局基础上做轻量调整。
+ *
+ * 原始布局（board-layout.ts）把主干道铺成圆环；这里在此基础上：
+ *  1. 建筑向外推（外圈）
+ *  2. 枢纽（出度≥3）向内拉（内圈）
+ *  3. 轻量排斥（避免重叠）
+ *  4. 裁剪到画布范围
  */
 function adjustPositions(tiles: BoardTile[], spine: string[]): void {
   const CX = 50, CY = 50;
-  const spineSet = new Set(spine);
-  const spineList = spine.filter((id) => tiles.find((t) => t.id === id));
-  // 预计算建筑列表和均匀分布角度
-  const buildingTiles = tiles.filter((t) => t.isBuilding);
-  const bSpacing = (Math.PI * 2) / buildingTiles.length;
 
-  // 第一轮：按类型分到三层
+  // 第一轮：按类型分层
   for (const t of tiles) {
     const dx = t.x - CX;
     const dy = t.y - CY;
-    const angle = Math.atan2(dy, dx);
-    const origR = Math.hypot(dx, dy) || 1;
+    const r = Math.hypot(dx, dy) || 1;
+    const ang = Math.atan2(dy, dx);
 
     if (t.isBuilding) {
-      // 建筑：均匀分布在外圈（11 个建筑按 360°/11 ≈ 33° 均分）
-      const origAng = Math.atan2(dy, dx);
-      const nearestSlot = Math.round((origAng + Math.PI / 2) / bSpacing);
-      const slotAng = nearestSlot * bSpacing - Math.PI / 2;
-      const r = 52;
-      t.x = CX + Math.cos(slotAng) * r;
-      t.y = CY + Math.sin(slotAng) * r;
+      // 建筑：外推到 r≈54
+      const target = 54;
+      t.x = CX + Math.cos(ang) * target;
+      t.y = CY + Math.sin(ang) * target;
     } else if (t.out.length >= 3 || t.in.length >= 3) {
-      // 枢纽：内圈 r=10..18
-      const r = Math.min(18, origR * 0.3);
-      t.x = CX + Math.cos(angle) * r;
-      t.y = CY + Math.sin(angle) * r;
-    } else if (spineSet.has(t.id)) {
-      // 站点：中环，交替半径
-      const spineIdx = spineList.indexOf(t.id);
-      const r = spineIdx >= 0 ? (spineIdx % 2 === 0 ? 38 : 44) : origR;
-      t.x = CX + Math.cos(angle) * r;
-      t.y = CY + Math.sin(angle) * r;
+      // 枢纽：内拉到 r≈15
+      const target = 15;
+      t.x = CX + Math.cos(ang) * target;
+      t.y = CY + Math.sin(ang) * target;
+    } else {
+      // 站点：保持原始位置，轻微外推到 r≈40-46
+      const target = Math.max(40, Math.min(46, r));
+      t.x = CX + Math.cos(ang) * target;
+      t.y = CY + Math.sin(ang) * target;
     }
   }
 
-  // 第二轮：迭代推开（最小间距 4.5，建筑更轻）
-  const MIN_DIST = 4.5;
-  for (let iter = 0; iter < 25; iter++) {
+  // 第二轮：轻量排斥（仅推开太近的非建筑节点）
+  const MIN_DIST = 4.0;
+  for (let iter = 0; iter < 15; iter++) {
     let moved = false;
     for (let i = 0; i < tiles.length; i++) {
       for (let j = i + 1; j < tiles.length; j++) {
@@ -175,51 +171,25 @@ function adjustPositions(tiles: BoardTile[], spine: string[]): void {
         let dy = b.y - a.y;
         let d = Math.hypot(dx, dy);
         if (d >= MIN_DIST) continue;
-        if (d < 0.01) { dx = (i - j) || 1; dy = (j - i) || 1; d = Math.hypot(dx, dy) || 1; }
-        const push = (MIN_DIST - d) * 0.5 + 0.2;
+        if (d < 0.01) { dx = 1; dy = 0; d = 1; }
+        const push = (MIN_DIST - d) * 0.4;
         const ux = dx / d, uy = dy / d;
+        // 建筑不动，只推站点
         const wA = a.isBuilding ? 0 : 1;
         const wB = b.isBuilding ? 0 : 1;
-        if (wA === 0 && wB === 0) continue; // 两个建筑由角度旋转处理
+        if (wA === 0 && wB === 0) continue;
         const wSum = wA + wB;
-        a.x -= ux * push * (wB / wSum) * 2;
-        a.y -= uy * push * (wB / wSum) * 2;
-        b.x += ux * push * (wA / wSum) * 2;
-        b.y += uy * push * (wA / wSum) * 2;
+        a.x -= ux * push * (wB / wSum);
+        a.y -= uy * push * (wB / wSum);
+        b.x += ux * push * (wA / wSum);
+        b.y += uy * push * (wA / wSum);
         moved = true;
       }
     }
     if (!moved) break;
   }
 
-  // 第三轮：建筑角度微调——优先拉开建筑之间的角度
-  for (let pass = 0; pass < 5; pass++) {
-    for (const b of tiles) {
-      if (!b.isBuilding) continue;
-      const origAng = Math.atan2(b.y - CY, b.x - CX);
-      const origR = Math.hypot(b.x - CX, b.y - CY);
-      let bestAng = origAng;
-      let bestScore = -1;
-      for (const delta of [0.15, -0.15, 0.3, -0.3, 0.5, -0.5, 0.8, -0.8, 1.2, -1.2]) {
-        const ang = origAng + delta;
-        const nx = CX + Math.cos(ang) * origR;
-        const ny = CY + Math.sin(ang) * origR;
-        // 评分：建筑间距（权重3）+ 站点间距（权重1）
-        let bMin = Infinity, sMin = Infinity;
-        for (const a of tiles) {
-          if (a === b) continue;
-          const d = Math.hypot(nx - a.x, ny - a.y);
-          if (a.isBuilding) bMin = Math.min(bMin, d);
-          else sMin = Math.min(sMin, d);
-        }
-        const score = (bMin === Infinity ? 100 : bMin * 3) + (sMin === Infinity ? 100 : sMin);
-        if (score > bestScore) { bestScore = score; bestAng = ang; }
-      }
-      b.x = CX + Math.cos(bestAng) * origR;
-      b.y = CY + Math.sin(bestAng) * origR;
-    }
-  }
-
+  // 裁剪到画布范围
   for (const t of tiles) {
     t.x = Math.max(3, Math.min(97, t.x));
     t.y = Math.max(3, Math.min(97, t.y));

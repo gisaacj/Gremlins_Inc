@@ -33,6 +33,38 @@ export interface ActionResult {
 const fail = (error: string): ActionResult => ({ ok: false, error });
 const ok = (pending?: PendingChoice): ActionResult => ({ ok: true, pending });
 
+/**
+ * 检查当前玩家是否还有可做的事情；如果没有则自动结束回合。
+ *
+ * 触发条件（全部满足）：
+ *  - 无挂起决策
+ *  - 已移动（movedThisTurn = true）或在狱中
+ *  - 无额外走牌可走（extraTurns = 0 或没有可移动牌）
+ *  - 无可打效果牌
+ *  - 无可选动作（站点/建筑）
+ */
+function maybeAutoEnd(state: EngineState): ActionResult {
+  if (state.pending) return ok(state.pending);
+
+  const pid = currentPlayerId(state);
+  const p = getPlayer(state, pid);
+  if (!p) return ok();
+  if (!p.movedThisTurn && !p.inJail) return ok();
+
+  // 有额外走牌且还能移动 → 不自动结束
+  if (p.extraTurns > 0 && movableCards(state, pid).length > 0) return ok();
+
+  // 还有可打的效果牌 → 不自动结束
+  if (playableCards(state, pid).length > 0) return ok();
+
+  // 还有可选动作 → 不自动结束
+  if (availableOptions(state, pid).length > 0) return ok();
+
+  // 没事可做了 → 自动换人
+  const r = nextTurn(state);
+  return r.ok ? ok() : fail(r.error ?? '换人失败');
+}
+
 /** 建立新对局 */
 export const newGame = createState;
 
@@ -157,7 +189,8 @@ export function moveWithCard(
   }
 
   if (!result.ok) return fail(result.reason ?? '移动失败');
-  return ok(result.pending);
+  if (result.pending) return ok(result.pending);
+  return maybeAutoEnd(state);
 }
 
 /**
@@ -274,7 +307,8 @@ export function playCard(
   if (!chk.ok) return fail(chk.reason ?? '不能打出');
   const r = playEffectCard(state, playerId, cardId);
   if (!r.ok) return fail(r.reason ?? '打出失败');
-  return ok(r.pending);
+  if (r.pending) return ok(r.pending);
+  return maybeAutoEnd(state);
 }
 
 /** 跳过打牌（不做任何事） */
@@ -500,7 +534,8 @@ export function answerChoice(
   if (state.pending.playerId !== playerId) return fail('不是你的决策');
   const r = resolvePending(state, playerId, values);
   if (!r.ok) return fail(r.reason ?? '应答失败');
-  return ok(r.pending);
+  if (r.pending) return ok(r.pending);
+  return maybeAutoEnd(state);
 }
 
 // ---------------------------------------------------------------- 服刑

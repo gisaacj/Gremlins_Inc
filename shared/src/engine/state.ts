@@ -724,41 +724,95 @@ export function resolvePending(
     return resolveConflictCard(state, playerId, answer[0] ?? 'decline');
   }
 
-  // 弃牌移动（a059 二手货）：玩家选了对手，随机弃对手一张牌，
-  // 以该牌 MovePoints 为步数，再给对手补 1 张
+  // 弃牌移动（a059 二手货）：**两段式**
+  //   第 1 段选对手 → 随机弃其一张牌，以该牌 MovePoints 为步数（再给对手补 1 张）
+  //   第 2 段选目的地 → 按该目的地走
+  //
+  // ⚠️ 两段复用同一个 kind，用 `resume.scratch.phase` 区分。
+  // 早先只有第 1 段、且不选目的地，于是步数一定就闷头走 —— 玩家选好的目的地
+  // 不生效（用户报的 bug #1）。
   if (pending.kind.startsWith('discardMove:')) {
     const moveCardId = pending.kind.slice('discardMove:'.length);
-    const opponentId = answer[0];
-    const opponent = state.players.find((x) => x.id === opponentId);
-    if (!opponent) return { ok: false, reason: '对手不存在' };
-    if (opponent.hand.length === 0) return { ok: false, reason: '对手没有手牌' };
-
-    // 随机弃对手一张牌
-    const rIdx = Math.floor(random(state) * opponent.hand.length);
-    const stolenId = opponent.hand[rIdx];
-    opponent.hand.splice(rIdx, 1);
-    state.discard.push(stolenId);
-    // 给对手补 1 张
-    drawTo(state, opponent, 1);
-
-    const stolen = CARD_BY_ID[stolenId];
-    const steps = stolen?.move ?? 0;
-    if (steps <= 0) {
-      // 弃出的牌没有移动点数 → 步数为 0，仍完成移动（卡牌已消耗）
-      pushLog(state, playerId, `二手货：弃对手 ${opponent.name} 的「${stolen?.text.name ?? stolenId}」，无移动点数`);
-    } else {
-      pushLog(state, playerId, `二手货：弃对手 ${opponent.name} 的「${stolen?.text.name ?? stolenId}」，移动 ${steps} 步`);
-    }
+    const phase = String(pending.resume.scratch?.phase ?? 'opponent');
     const player = getPlayer(state, playerId);
     if (!player) return { ok: false, reason: '玩家不存在' };
-    player.flags['customMoveSteps'] = steps;
 
+    // ── 第 1 段：选对手 → 抽牌定步数 → 挂起问目的地 ──
+    if (phase === 'opponent') {
+      const opponentId = answer[0];
+      const opponent = state.players.find((x) => x.id === opponentId);
+      if (!opponent) return { ok: false, reason: '对手不存在' };
+      if (opponent.hand.length === 0) return { ok: false, reason: '对手没有手牌' };
+
+      if (state.deck.length === 0 && state.discard.length > 0) {
+        state.deck = state.discard.splice(0).reverse();
+      }
+      // 随机弃对手一张牌
+      const rIdx = Math.floor(random(state) * opponent.hand.length) % opponent.hand.length;
+      const stolenId = opponent.hand[rIdx]!;
+      opponent.hand.splice(rIdx, 1);
+      state.discard.push(stolenId);
+      // 给对手补 1 张
+      drawTo(state, opponent, 1);
+
+      const stolen = CARD_BY_ID[stolenId];
+      const steps = stolen?.move ?? 0;
+      player.flags['customMoveSteps'] = steps;
+      pushLog(state, playerId,
+        `二手货：弃对手 ${opponent.name} 的「${stolen?.text.name ?? stolenId}」，`
+        + (steps > 0 ? `可移动 ${steps} 步，请选择目的地` : '该牌没有移动点数'));
+
+      // 步数为 0 → 没得选，直接结束
+      if (steps <= 0) {
+        player.flags['customMoveSteps'] = 0;
+        state.pending = undefined;
+        const r0 = startMove(state, playerId, moveCardId);
+        return r0;
+      }
+
+      // 挂起问目的地（第二段）。
+      //
+      // 候选 = "用**恰好** steps 步能走到"的所有格子，与客户端预览
+      // （`computeReachableTiles`）用的是同一套寻路判据，所以两边一致。
+      const graph = graphOfMap(getMap(state), isReverseMoveCard(moveCardId));
+      const options: Array<{ value: string; label: string }> = [];
+      for (const c of getMap(state).cells) {
+        if (c.id === player.cellId) continue;
+        if (!findPathTo(graph, player.cellId, steps, c.id)) continue;
+        options.push({
+          value: c.id,
+          label: `${cellLabel(c)}（${cellTypeOf(c)?.cellType ?? ''}）`,
+        });
+        if (options.length >= 40) break;
+      }
+      if (!options.length) {
+        // 走不到任何地方 → 不挂起，直接走完
+        state.pending = undefined;
+        return startMove(state, playerId, moveCardId);
+      }
+      state.pending = {
+        kind: pending.kind,
+        playerId,
+        prompt: `二手货：可移动 ${steps} 步，选择目的地`,
+        options,
+        min: 1,
+        max: 1,
+        resume: {
+          actions: [],
+          index: 0,
+          targets: [],
+          source: '二手货',
+          ownerId: playerId,
+          scratch: { phase: 'dest', steps: String(steps) },
+        },
+      };
+      return { ok: true, pending: state.pending };
+    }
+
+    // ── 第 2 段：选目的地 → 按目的地走 ──
+    const chosen = answer[0];
+    const dest = chosen && chosen !== '__skip_dest__' ? chosen : undefined;
     state.pending = undefined;
-
-    // ⚠️ 目的地要交给 `startMove` 去**算出整条路径**（`options.destinationTileId`），
-    // 只设 `destTileId` 只够"到了就提前停"，中途仍会在岔路口乱走
-    // （用户报的 bug #1：二手货移动不符合预期）。
-    const dest = pending.resume.scratch?.destinationTileId;
     const result = startMove(state, playerId, moveCardId, undefined, {
       destinationTileId: dest,
     });

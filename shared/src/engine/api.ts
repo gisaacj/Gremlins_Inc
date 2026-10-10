@@ -167,7 +167,11 @@ export function moveWithCard(
         targets: [],
         source: '二手货',
         ownerId: playerId,
-        scratch: destinationTileId ? { destinationTileId } : undefined,
+        // phase 表示"这段挂起在问什么"：
+        //   'opponent'（缺省）= 选对手；'dest' = 选目的地
+        // 两段复用同一个 kind，客户端不必为"选目的地"新增协议分支
+        // （仍然走 game:choose，UI 会渲染成选项列表）。
+        scratch: { phase: 'opponent' },
       },
     };
     state.pending = pending;

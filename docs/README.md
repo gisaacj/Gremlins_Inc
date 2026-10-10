@@ -590,6 +590,39 @@ $ node tools/audit-doc-consistency.mjs
 
 ---
 
+## 代码仓库与推送
+
+项目有两处远端，**分支名不同**：
+
+| 远端 | 地址 | 分支 |
+|---|---|---|
+| GitHub | `github.com/gisaacj/Gremlins_Inc` | `master` |
+| Gitee | `gitee.com/gisaacj/Gremlins_Inc2` | **`main`** |
+
+一次推两边：
+
+```powershell
+node tools/push-both.mjs
+```
+
+**踩过的坑**：
+
+1. **Gitee 的默认分支叫 `main`**，不是 `master` —— 直接 `push origin master`
+   会在 Gitee 上多出一个 `master` 分支，而默认分支仍是旧的 `main`。
+2. **Gitee 凭据在 Windows 凭据管理器里，但仓库没配 `credential.helper`**，
+   所以 git 默认**不会**去读它（表现为匿名推送 → 权限拒绝）。
+   脚本显式带 `-c credential.helper=wincred`。
+3. `-c` 是 **git 全局选项，必须在子命令之前**：
+   写 `git push -c x=y` 会报 `unknown switch 'c'`，得写 `git -c x=y push`。
+4. GitHub 间歇性 443 超时 / 502；超时时用 `tools/push-via-api.mjs`
+   走 Git Data API 通道兜底（会重建对象，故 sha 与本地不同，但 tree 一致）。
+
+**另**：主工作区 `E:\code\小魔怪` 里还有与游戏无关的辅助目录
+（`gremlins-ocr` OCR 工具、`test/` 反编译产物与数据提取脚本、若干日志），
+这些**不在仓库里**，只有游戏本体代码入库。
+
+---
+
 ## 一、重要前提：反编译范围的边界 ⚠️
 
 **必须先读这一节**，否则会误判文档的权威程度。

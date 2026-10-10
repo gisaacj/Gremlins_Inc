@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import type { SerializedPlayer } from '@gremlins/shared';
 import {
-  BOARD_VIEW, getBoardView, isBidirectional, CARD_BY_ID,
+  BOARD_VIEW, getBoardView, isBidirectional,
   type BoardViewData, type BoardTile, type CellTypeName,
 } from '@gremlins/shared';
 import { createLogger } from '../utils/logger.js';
@@ -48,25 +48,7 @@ export function BoardView({
 
   const destSet = new Set(moveDestTiles ?? []);
   const pathSet = new Set(pathTiles ?? []);
-  // 岔路口用空心环标记，提示玩家这里要选方向
   const junctionSet = new Set(board.junctions);
-
-  // 计算手牌中有可用牌的建筑（高亮提示）
-  const playableBuildingIds = useMemo(() => {
-    const s = new Set<string>();
-    if (!myPlayer?.hand?.length) return s;
-    for (const cardId of myPlayer.hand) {
-      const card = CARD_BY_ID[cardId];
-      if (!card?.cellTypeId) continue;
-      for (const t of tiles) {
-        if (t.isBuilding && t.cell.cellTypeId === card.cellTypeId) {
-          s.add(t.id);
-          break;
-        }
-      }
-    }
-    return s;
-  }, [myPlayer?.hand, tiles]);
 
   useEffect(() => {
     boardLog.debug('players on board:',
@@ -164,7 +146,6 @@ export function BoardView({
           const isDest = destSet.has(t.id);
           const isSelectedDest = selectedDestTile === t.id;
           const isPath = pathSet.has(t.id);
-          const hasPlayableCard = playableBuildingIds.has(t.id);
 
           return (
             <g
@@ -187,11 +168,6 @@ export function BoardView({
               )}
               {isSelectedDest && (
                 <circle r={r + 1.6} fill="none" stroke="#f5b800" strokeWidth="0.7" opacity="0.95" />
-              )}
-              {hasPlayableCard && !isSelectedDest && (
-                <circle r={r + 1.0} fill="none" stroke="#2ecc71" strokeWidth="0.5" opacity="0.7">
-                  <animate attributeName="opacity" values="0.35;0.7;0.35" dur="2s" repeatCount="indefinite" />
-                </circle>
               )}
               {isBuilding ? (
                 <rect

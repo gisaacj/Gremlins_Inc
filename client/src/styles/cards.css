@@ -72,6 +72,17 @@
   transform: none;
 }
 
+.card-highlight {
+  box-shadow: 0 0 12px 2px rgba(46,204,113,0.6);
+  border-color: #2ecc71;
+  animation: card-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes card-pulse {
+  0%, 100% { box-shadow: 0 0 8px 1px rgba(46,204,113,0.4); }
+  50% { box-shadow: 0 0 16px 3px rgba(46,204,113,0.7); }
+}
+
 .card-move {
   position: absolute;
   top: 4px;

@@ -8,6 +8,7 @@ interface CardProps {
   cardId: string;
   selected?: boolean;
   disabled?: boolean;
+  highlight?: boolean;
   onClick?: () => void;
   onLongPress?: () => void;
   compact?: boolean;
@@ -37,14 +38,14 @@ function useCardDisplay(card: ActionCard) {
   };
 }
 
-export function Card({ cardId, selected, disabled, onClick, onLongPress }: CardProps) {
+export function Card({ cardId, selected, disabled, highlight, onClick, onLongPress }: CardProps) {
   const card = CARD_BY_ID[cardId] as ActionCard | undefined;
   if (!card) return null;
   const d = useCardDisplay(card);
 
   return (
     <div
-      className={`card ${d.bg} ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}`}
+      className={`card ${d.bg} ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''} ${highlight ? 'card-highlight' : ''}`}
       onClick={disabled ? undefined : onClick}
       onDoubleClick={onLongPress}
     >

@@ -259,12 +259,15 @@ export function GamePage() {
           const isSelected = selectedCardId === cardId;
           const isMovePhase = prompt?.type === 'select_move_card';
           const isPlayPhase = prompt?.type === 'play_card_or_skip';
+          // 移动后：手牌中可在当前格打出的牌高亮
+          const highlight = isPlayPhase && playable;
           return (
             <Card
               key={cardId}
               cardId={cardId}
               selected={isSelected}
               disabled={isMyTurn && !playable}
+              highlight={highlight}
               onLongPress={() => setCardDetail(cardId)}
               onClick={() => {
                 if (isMyTurn && isMovePhase && playable) {

@@ -11,7 +11,7 @@ import type {
 import {
   ACTION_CARDS, CARD_BY_ID, CELL_TYPES, CELL_TYPE_BY_ID, CHARACTERS, CHARACTER_BY_ID,
   CHAOS_CARDS, CELL_TYPE_BY_NAME, GAME_CONST, JAIL_CARDS, MISFORTUNE_CARDS,
-  CUSTOM_MAP, cellLabel, cellTypeOf, characterName, getCell, getMap, getPlayer,
+  CUSTOM_MAP, NORMAL_MAP, cellLabel, cellTypeOf, characterName, getCell, getMap, getPlayer,
 } from './model.js';
 import {
   ELECTION_INTERVAL, arrest, discardFromHand, drawMisfortune, drawTo, random, release,
@@ -66,10 +66,22 @@ function buildPlayer(
   res.score = 0;
   res.term = 0;
 
-  // 起始格：原版 NormalCellStartID 指向地图上的具体格
-  const startCellId = char?.normalStartCellId && getCell(state, char.normalStartCellId)
-    ? char.normalStartCellId
-    : getMap(state).cells[0].id;
+  // 起始格：按角色对应的格子类型在当前棋盘中查找
+  const startCellId = (() => {
+    if (char?.normalStartCellId && getCell(state, char.normalStartCellId)) {
+      return char.normalStartCellId;
+    }
+    // 角色的起始格 ID 不在当前棋盘中（如自定义棋盘），
+    // 按原版棋盘中的格子类型，在当前棋盘找同类型的第一格
+    if (char?.normalStartCellId) {
+      const origCell = NORMAL_MAP.cells.find((c) => c.id === char.normalStartCellId);
+      if (origCell) {
+        const match = getMap(state).cells.find((c) => c.cellType === origCell.cellType);
+        if (match) return match.id;
+      }
+    }
+    return getMap(state).cells[0].id;
+  })();
 
   return {
     id: args.id,

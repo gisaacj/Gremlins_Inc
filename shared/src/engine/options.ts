@@ -346,11 +346,7 @@ function stationOptions(
       break;
     }
 
-    // 藏宝阁：掷骰寻宝（原版必掷）
-    case 'Treasure': {
-      out.push({ id: 'treasure.dig', label: '寻宝（掷骰）', description });
-      break;
-    }
+    // 藏宝阁：OptionalFlag=false → 停留时自动掷骰（见 state.ts resolveLanding），不作为可选动作
 
     default:
       break;
@@ -647,13 +643,7 @@ export function doOption(
       return doneUsed(`掷出 ${r.dice}：${r.message}${poorest ? `，最穷额外 +${bonus}` : ''}`);
     }
 
-    case 'treasure': {
-      // 藏宝阁：掷骰寻宝（原版必掷，按 Label 表结算）
-      const table = diceTableOf('Treasure');
-      const r = rollOnTable(state, p, table);
-      logIt(`藏宝阁掷出 ${r.dice}：${r.message}`);
-      return doneUsed(`掷出 ${r.dice}：${r.message}`);
-    }
+    // treasure 已移至 state.ts resolveLanding 自动结算（OptionalFlag=false）
 
     case 'tribune': {
       const amt = Number(parts[2] ?? 0);

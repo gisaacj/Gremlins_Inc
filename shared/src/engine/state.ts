@@ -22,7 +22,7 @@ import {
   applyImmediatePermanents, discardPermanent, extraBribeFrom, fireTrigger,
 } from './permanents.js';
 import { bribeModifier, fireAbility } from './abilities.js';
-import { availableOptions } from './options.js';
+import { availableOptions, diceTableOf } from './options.js';
 import { centralMisfortuneId } from '../board-view.js';
 
 export interface EngineInitArgs {
@@ -705,7 +705,8 @@ function removeFromHand(state: EngineState, p: EnginePlayer, cardId: string): vo
   if (i >= 0) p.hand.splice(i, 1);
 }
 
-/** 经过格子的效果（收入/贿赂等） */
+/** 经过格子的效果（收入/贿赂/厄运等）
+ *  调用方已排除终点格（path.slice(0,-1)），此处处理全部传入格。 */
 function resolvePassThrough(
   state: EngineState,
   p: EnginePlayer,
@@ -716,6 +717,11 @@ function resolvePassThrough(
     const cell = getCell(state, cellId);
     if (!cell) continue;
     const t = cellTypeOf(cell);
+    if (!t) continue;
+    // 只有 OptionalFlag=false 的站点（BuildingFlag=false）在经过时触发
+    // OptionalFlag=true 的站点（警察/演讲/赌博）只在停留时可选
+    // 建筑（BuildingFlag=true）经过不触发
+    if (t.optional || t.building) continue;
     switch (cell.cellType) {
       case 'Income': {
         const gain = p.res.income;
@@ -726,21 +732,15 @@ function resolvePassThrough(
         break;
       }
       case 'Bribe': {
-        // 镇长免付
         if (state.mayorId === p.id) break;
-        // 永久卡规避（「借口生成器」50% 机率）
         const flags: Record<string, string | number | boolean> = {};
         fireTrigger(state, 'bribeSpot', { actorId: p.id, cellId, flags });
         if (flags.bribeSkipped) break;
-        // 商人·动起来：用 5 点以上移动时免付
         if (mvFlags.skipBribe) break;
-
         const amount = bribeAmount(state, p);
         if (amount > 0) {
           const paid = Math.min(p.res.money, amount);
           addRes(p, 'money', -paid);
-          // 原版：无法全额支付时 +1 罪恶（MALICE_FOR_BRIBE=1）
-          // 贿赂金归银行（不给镇长）
           if (paid < amount) {
             addRes(p, 'malice', 1);
             pushLog(state, p.id, `经过贿赂格：支付 ${paid} 金钱（不足 ${amount - paid}），+1 罪恶`);
@@ -751,7 +751,9 @@ function resolvePassThrough(
         break;
       }
       case 'Misfortune': {
-        // 经过厄运格：原版仅停留才结算，经过不触发
+        if (p.flags['ignoreCell']) break;
+        drawMisfortuneFor(state, p);
+        pushLog(state, p.id, '经过厄运格：抽一张厄运牌');
         break;
       }
       default:
@@ -871,14 +873,30 @@ function resolveLanding(state: EngineState, p: EnginePlayer): PendingChoice | un
       };
     }
     case 'Risk': {
-      // 风险格（赌博站）：可选掷骰，不在落地时自动掷。
-      // 保险只对冒险格（Danger）生效，此处不检查。
+      // 风险格（赌博站）：OptionalFlag=true，可选掷骰，不在落地时自动掷
       break;
     }
-     // Tribune（演讲格）是 OptionalFlag=true，只有可选动作给选票，不停留不自动给
-     break;
-     // 地狱：OptionalFlag=false，停留时自动扣 100 金钱抽 1 张牌
-     case 'Inferno': {
+    case 'Treasure': {
+      // 藏宝阁：OptionalFlag=false → 停留时自动掷骰
+      if (p.flags['ignoreCell']) break;
+      const table = diceTableOf('Treasure');
+      const dice = rollDice(state);
+      state.lastRoll = dice;
+      const outcome = table[dice];
+      const parts: string[] = [];
+      if (outcome?.gain) {
+        for (const [k, v] of Object.entries(outcome.gain)) {
+          if (!v) continue;
+          addRes(p, k as 'score' | 'vote' | 'malice' | 'money' | 'income', v);
+          parts.push(`${v > 0 ? '+' : ''}${v} ${k}`);
+        }
+      }
+      pushLog(state, p.id, `藏宝阁：掷出 ${dice} → ${parts.join('，') || '无事发生'}`);
+      break;
+    }
+    // Tribune（演讲格）是 OptionalFlag=true，只有可选动作给选票，不停留不自动给
+    // 地狱：OptionalFlag=false，停留时自动扣 100 金钱抽 1 张牌
+    case 'Inferno': {
        const cost = cellType.params[0] ?? 100;
        if (p.res.money >= cost) {
          addRes(p, 'money', -cost);

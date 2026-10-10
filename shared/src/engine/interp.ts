@@ -652,11 +652,17 @@ function execAction(
       return undefined;
 
     // ============ 回合流程 ============
-    case 'AddTurn':
-    case 'PlayExtraCard': {
+    case 'AddTurn': {
       const o = owner(state, ctx);
       o.extraTurns += 1;
       log(state, o.id, `${ctx.source}：获得 1 次额外走牌`);
+      return undefined;
+    }
+    case 'PlayExtraCard': {
+      // 原版：额外打出一张效果牌（不是额外移动）
+      const o = owner(state, ctx);
+      o.flags['canPlayAgain'] = 1;
+      log(state, o.id, `${ctx.source}：可再打出一张卡牌`);
       return undefined;
     }
     case 'SkipDraw': {

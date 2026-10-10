@@ -146,20 +146,44 @@ export function buildEnginePrompt(
     return { type: 'wait_others', message: `等待 ${current.name} 行动` };
   }
 
-  // 轮到该玩家：根据是否已移动给出不同提示
-  const optional = availableOptions(state, viewerId);
+  // 轮到该玩家：按 GTurnPhase 顺序给出提示
+  // Begin → Move → UseCard → UseCell → 换人
   const inJail = current.inJail;
   const place = cellLabel(getCell(state, current.cellId));
 
-  // 已移动到达：可选打牌或跳过（跳过=自动换人）
+  // === Move 阶段：未移动，必须移动（或狱中服刑）===
+  if (!current.movedThisTurn && !inJail) {
+    return {
+      type: 'select_move_card',
+      message: `请选择一张卡牌用于移动`,
+      options: current.hand,
+      optionalActions: [],
+    };
+  }
+
+  // 已移动到达后：分 UseCard → UseCell 两阶段
   if (current.movedThisTurn && !inJail) {
-    const playable = playableCards(state, viewerId);
+    const optional = availableOptions(state, viewerId);
+    const canPlayAgain = current.flags['canPlayAgain'] === 1;
+
+    // === UseCard 阶段：可打一张牌或跳过（无建筑选项）===
+    if (current.cardsPlayedThisTurn === 0 || canPlayAgain) {
+      const playable = playableCards(state, viewerId);
+      return {
+        type: 'play_card_or_skip',
+        message: `到达「${place}」：可打出一张卡牌，或跳过`,
+        options: playable,
+        optionalActions: [],
+      };
+    }
+
+    // === UseCell 阶段：可用建筑动作或跳过（无卡牌）===
     return {
       type: 'play_card_or_skip',
       message: optional.length
-        ? `到达「${place}」：可打牌/执行动作，或跳过`
-        : `到达「${place}」：可打牌，或跳过`,
-      options: playable,
+        ? `「${place}」可用动作，或跳过结束回合`
+        : `无可用动作，跳过结束回合`,
+      options: [],
       optionalActions: optional.map((o) => ({
         id: o.id,
         label: o.label,
@@ -171,25 +195,12 @@ export function buildEnginePrompt(
     };
   }
 
-  // 未移动：必须移动（或狱中服刑）
-  const message = inJail
-    ? '你在狱中，请服刑（抽监狱卡）'
-    : optional.length
-      ? `选择卡牌移动，或执行「${place}」的动作`
-      : '请选择一张卡牌用于移动';
-
+  // 狱中
   return {
     type: 'select_move_card',
-    message,
-    options: current.hand,
-    optionalActions: optional.map((o) => ({
-      id: o.id,
-      label: o.label,
-      description: o.description,
-      affordable: o.affordable,
-      reason: o.reason,
-      needsTarget: o.needsTarget,
-    })),
+    message: '你在狱中，请服刑（抽监狱卡）',
+    options: [],
+    optionalActions: [],
   };
 }
 

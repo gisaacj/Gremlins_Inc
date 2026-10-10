@@ -49,10 +49,10 @@ export function GamePage() {
 
   const playableCardIds = new Set(
     prompt?.type === 'select_move_card'
-      ? (prompt.options ?? [])
-      : prompt?.type === 'play_card_or_skip'
-        ? (prompt.options ?? [])
-        : [],
+      ? (prompt.options ?? [])  // Move 阶段：全部手牌可移动
+      : prompt?.type === 'play_card_or_skip' && (prompt.options ?? []).length > 0
+        ? (prompt.options ?? [])  // UseCard 阶段：只有列出的牌可打
+        : [],  // UseCell 阶段或无提示：无牌可打
   );
 
   return (
@@ -257,7 +257,10 @@ export function GamePage() {
       {/* 手牌 */}
       <div className="hand">
         {myHand.map((cardId) => {
-          const playable = isMyTurn && playableCardIds.has(cardId);
+          const playable = isMyTurn && (
+            (isMovePhase && playableCardIds.has(cardId)) ||
+            (isPlayPhase && playableCardIds.has(cardId))
+          );
           const isSelected = selectedCardId === cardId;
           const isMovePhase = prompt?.type === 'select_move_card';
           const isPlayPhase = prompt?.type === 'play_card_or_skip';

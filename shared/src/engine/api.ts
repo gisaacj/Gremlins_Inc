@@ -10,7 +10,7 @@ import {
 } from './model.js';
 import {
   canAffordCard, canMoveWithCard, canPlayCard, createState, endTurn,
-  resolvePending, startMove, takeJailTurn,
+  resolveLanding, resolvePending, startMove, takeJailTurn,
 } from './state.js';
 import type { EngineInitArgs } from './state.js';
 import { playEffectCard } from './state.js';
@@ -50,6 +50,9 @@ function maybeAutoEnd(state: EngineState): ActionResult {
   const p = getPlayer(state, pid);
   if (!p) return ok();
   if (!p.movedThisTurn && !p.inJail) return ok();
+
+  // 终点格效果尚未结算 → 不自动结束（等 skipPlay 触发 resolveLanding）
+  if (!p.flags['cellResolved']) return ok();
 
   // 有额外走牌且还能移动 → 不自动结束
   if (p.extraTurns > 0 && movableCards(state, pid).length > 0) return ok();
@@ -311,11 +314,10 @@ export function playCard(
   return maybeAutoEnd(state);
 }
 
-/** 跳过打牌（不做任何事） */
+/** 跳过打牌 = UseCard 阶段结束，直接换人（终点格效果已在 Move 阶段结算完毕） */
 export function skipPlay(state: EngineState, playerId: string): ActionResult {
   if (!isTurn(state, playerId)) return fail('不是你的回合');
   if (state.pending) return fail('有未完成的决策');
-  // 原版规则：无"结束回合"按钮。跳过打牌 = 结束本回合，自动换人
   const r = nextTurn(state);
   return r.ok ? ok() : fail(r.error ?? '换人失败');
 }

@@ -413,16 +413,10 @@ export function startMove(
   // 「停止」（免厄运）都要先于结算生效。印花税等即时收益也在这里结算。
   fireAbility(state, p.id, 'afterMove', { steps: path.length, cellId: p.cellId });
 
-  // pass-through 只结算途经格（不含终点——终点由 resolveLanding 处理）
+  // pass-through 只结算途经格（不含终点——终点由 UseCell 阶段处理）
   resolvePassThrough(state, p, path.slice(0, -1), mvFlags);
-  if (!p.flags['ignoreCell']) {
-    // 警察格会挂起"付贿赂 / 掷骰"二选一；其余格同步结算
-    const pending = resolveLanding(state, p);
-    if (pending) {
-      state.pending = pending;
-      return { ok: true, path, pending };
-    }
-  }
+  // 标记：终点格效果尚未结算（等 UseCard 阶段结束后才进入 UseCell）
+  p.flags['cellResolved'] = 0;
 
   return { ok: true, path };
 }
@@ -538,6 +532,8 @@ export function playEffectCard(
   if (!p.flags['skipDraw']) {
     drawTo(state, p, 1);
   }
+  // 清除"可再打一张"标记（用掉了这次额外机会）
+  if (p.flags['canPlayAgain']) delete p.flags['canPlayAgain'];
 
   return { ok: true };
 }
@@ -809,7 +805,7 @@ function resolvePassThrough(
  *
  * @returns 需要玩家决策时返回挂起项（目前只有警察格），否则 undefined
  */
-function resolveLanding(state: EngineState, p: EnginePlayer): PendingChoice | undefined {
+export function resolveLanding(state: EngineState, p: EnginePlayer): PendingChoice | undefined {
   const cell = getCell(state, p.cellId);
   if (!cell) return;
   const cellType = cellTypeOf(cell);

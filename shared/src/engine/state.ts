@@ -72,12 +72,24 @@ function buildPlayer(
       return char.normalStartCellId;
     }
     // 角色的起始格 ID 不在当前棋盘中（如自定义棋盘），
-    // 按原版棋盘中的格子类型，在当前棋盘找同类型的第一格
+    // 按原版棋盘中同类型格子的序号，在当前棋盘找对应序号的格
     if (char?.normalStartCellId) {
       const origCell = NORMAL_MAP.cells.find((c) => c.id === char.normalStartCellId);
       if (origCell) {
-        const match = getMap(state).cells.find((c) => c.cellType === origCell.cellType);
-        if (match) return match.id;
+        // 原版同类型格按 num 排序，找序号
+        const origSameType = NORMAL_MAP.cells
+          .filter((c) => c.cellType === origCell.cellType)
+          .sort((a, b) => a.num - b.num);
+        const idx = origSameType.findIndex((c) => c.id === origCell.id);
+        // 当前棋盘同类型格按 num 排序，取相同序号
+        const curSameType = getMap(state).cells
+          .filter((c) => c.cellType === origCell.cellType)
+          .sort((a, b) => a.num - b.num);
+        if (idx >= 0 && idx < curSameType.length) {
+          return curSameType[idx].id;
+        }
+        // 序号越界则取最后一个
+        if (curSameType.length > 0) return curSameType[curSameType.length - 1].id;
       }
     }
     return getMap(state).cells[0].id;
@@ -151,14 +163,33 @@ export function createState(args: EngineInitArgs): EngineState {
   shuffleInPlace(state, state.misfortuneDeck);
   shuffleInPlace(state, state.jailDeck);
 
+  // 角色分配追踪：已分配的角色不重复
+  const assignedChars = new Set<string>();
+
   // 玩家按原版行动顺序（StepOrderNum）排列
+  // 角色分配：从全部角色中随机分配，不重复（原版 RandomFromThree / All 模式均不重复）
+  const allCharIds = CHARACTERS.map((c) => c.id);
+  shuffleInPlace(state, allCharIds);
   const sorted = args.players.slice().sort((a, b) => {
-    const oa = a.characterId ? CHARACTER_BY_ID[a.characterId]?.order ?? 99 : 99;
-    const ob = b.characterId ? CHARACTER_BY_ID[b.characterId]?.order ?? 99 : 99;
-    return oa - ob;
+    // 无角色时按加入顺序
+    return 0;
   });
 
-  state.players = sorted.map((p, i) => buildPlayer(p, i, state));
+  state.players = sorted.map((p, i) => {
+    // 优先用客户端指定的角色（如果合法且未被占用），否则随机分配
+    let charId = p.characterId;
+    if (!charId || !CHARACTER_BY_ID[charId] || assignedChars.has(charId)) {
+      charId = allCharIds[i] ?? allCharIds[0];
+    }
+    assignedChars.add(charId);
+    return buildPlayer({ ...p, characterId: charId }, i, state);
+  });
+  // 按角色行动顺序排序（原版 StepOrderNum）
+  state.players.sort((a, b) => {
+    const ca = a.characterId ? CHARACTER_BY_ID[a.characterId] : undefined;
+    const cb = b.characterId ? CHARACTER_BY_ID[b.characterId] : undefined;
+    return (ca?.order ?? 99) - (cb?.order ?? 99);
+  });
   state.deck = deck;
 
   // 发初始手牌

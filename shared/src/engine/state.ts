@@ -370,7 +370,8 @@ export function startMove(
   // 「停止」（免厄运）都要先于结算生效。印花税等即时收益也在这里结算。
   fireAbility(state, p.id, 'afterMove', { steps: path.length, cellId: p.cellId });
 
-  resolvePassThrough(state, p, path, mvFlags);
+  // pass-through 只结算途经格（不含终点——终点由 resolveLanding 处理）
+  resolvePassThrough(state, p, path.slice(0, -1), mvFlags);
   if (!p.flags['ignoreCell']) {
     // 警察格会挂起"付贿赂 / 掷骰"二选一；其余格同步结算
     const pending = resolveLanding(state, p);
@@ -631,9 +632,14 @@ function resolvePassThrough(
         if (amount > 0) {
           const paid = Math.min(p.res.money, amount);
           addRes(p, 'money', -paid);
-          const mayor = state.players.find((x) => x.id === state.mayorId);
-          if (mayor) addRes(mayor, 'money', paid);
-          pushLog(state, p.id, `经过贿赂格：支付 ${paid} 金钱`);
+          // 原版：无法全额支付时 +1 罪恶（MALICE_FOR_BRIBE=1）
+          // 贿赂金归银行（不给镇长）
+          if (paid < amount) {
+            addRes(p, 'malice', 1);
+            pushLog(state, p.id, `经过贿赂格：支付 ${paid} 金钱（不足 ${amount - paid}），+1 罪恶`);
+          } else {
+            pushLog(state, p.id, `经过贿赂格：支付 ${paid} 金钱`);
+          }
         }
         break;
       }
@@ -671,7 +677,12 @@ function resolveLanding(state: EngineState, p: EnginePlayer): PendingChoice | un
       const amount = bribeAmount(state, p) * 2;
       const paid = Math.min(p.res.money, amount);
       addRes(p, 'money', -paid);
-      pushLog(state, p.id, `停留贿赂格：双倍贿赂 ${paid} 金钱`);
+      if (paid < amount) {
+        addRes(p, 'malice', 1);
+        pushLog(state, p.id, `停留贿赂格：双倍贿赂 ${paid} 金钱（不足 ${amount - paid}），+1 罪恶`);
+      } else {
+        pushLog(state, p.id, `停留贿赂格：双倍贿赂 ${paid} 金钱`);
+      }
       break;
     }
     case 'Misfortune': {
@@ -734,12 +745,20 @@ function resolveLanding(state: EngineState, p: EnginePlayer): PendingChoice | un
       pushLog(state, p.id, `冒险格（可购买保险，费用 ${cellType.params[1] ?? 40}）`);
       break;
     }
-    case 'Tribune': {
-      const votes = Math.max(1, Math.floor((cellType.params[0] || 1)));
-      addRes(p, 'vote', votes);
-      pushLog(state, p.id, `演讲格：+${votes} 选票`);
-      break;
-    }
+     // Tribune（演讲格）是 OptionalFlag=true，只有可选动作给选票，不停留不自动给
+     break;
+     // 地狱：OptionalFlag=false，停留时自动扣 100 金钱抽 1 张牌
+     case 'Inferno': {
+       const cost = cellType.params[0] ?? 100;
+       if (p.res.money >= cost) {
+         addRes(p, 'money', -cost);
+         drawTo(state, p, 1);
+         pushLog(state, p.id, `地狱：付 ${cost} 金钱，抽 1 张牌`);
+       } else {
+         pushLog(state, p.id, `地狱：金钱不足 ${cost}，无效果`);
+       }
+       break;
+     }
     default:
       break;
   }

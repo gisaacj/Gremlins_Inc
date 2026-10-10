@@ -2,6 +2,7 @@ import type { ActionCard } from '@gremlins/shared';
 import {
   CARD_BY_ID, cardCategory, cardBuildingLabels, cardCostLabel,
   cardHarvestLabel, cardOutcomeLabel, cardTheme, CARD_CATEGORY_ZH,
+  cleanGameText, displayCardDescription, displayCardName,
 } from '@gremlins/shared';
 
 interface CardProps {
@@ -33,8 +34,14 @@ function useCardDisplay(card: ActionCard) {
     outcome: cardOutcomeLabel(card),
     category: CARD_CATEGORY_ZH[cardCategory(card)],
     theme: cardTheme(card),
-    /** 原文说明（中文），比 OCR 拼接的字段更完整 */
-    rules: card.text.description,
+    /**
+     * 说明文案：走显示层处理——替换 `{n}` 占位符、清 `\r` 控制符、
+     * 中文缺失或被截断时回退英文。直接用 `card.text.description`
+     * 会出现「丢弃{1}张卡牌。」这种带占位符的文案（实测 78/186 张卡）。
+     */
+    rules: displayCardDescription(card),
+    name: displayCardName(card),
+    flavor: cleanGameText(card.text.flavor ?? ''),
   };
 }
 
@@ -61,7 +68,7 @@ export function Card({ cardId, selected, disabled, highlight, onClick, onLongPre
 
       {/* 中间内容 */}
       <div className="card-body">
-        <div className="card-name">{card.text.name}</div>
+        <div className="card-name">{d.name}</div>
         {d.cost && <div className="card-line card-cost-line">成本 {d.cost}</div>}
         {d.harvest && <div className="card-line card-harvest-line">收获 {d.harvest}</div>}
         {d.outcome && <div className="card-line card-outcome-line">代价 {d.outcome}</div>}
@@ -101,14 +108,14 @@ export function CardDetail({
           )}
           <span className="card-detail-kind">{d.category}</span>
         </div>
-        <h3>{card.text.name}</h3>
+        <h3>{d.name}</h3>
         <div className="card-detail-info">
           {d.cost && <div><b>成本：</b>{d.cost}</div>}
           {d.harvest && <div><b>收获：</b>{d.harvest}</div>}
           {d.outcome && <div><b>代价：</b>{d.outcome}</div>}
         </div>
         {d.rules && <div className="card-detail-rules">{d.rules}</div>}
-        {card.text.flavor && <div className="card-detail-flavor">{card.text.flavor}</div>}
+        {d.flavor && <div className="card-detail-flavor">{d.flavor}</div>}
         {requireTarget && (
           <div className="card-detail-targets">
             <div style={{ fontSize: 12, marginBottom: 4 }}>选择目标：</div>

@@ -19,6 +19,7 @@ import {
   random, release, rollDice, runActions, runElection, type ActionContext,
 } from './interp.js';
 import { addRes, transferRes } from './resources.js';
+import { displayCardDescription, displayCardName } from '../display-text.js';
 import {
   applyImmediatePermanents, discardPermanent, extraBribeFrom, fireTrigger,
 } from './permanents.js';
@@ -1486,6 +1487,11 @@ export interface JailCandidate {
   cardId: string;
   name: string;
   description: string;
+  /** 英文原文，中文缺失时用于回退显示 */
+  enName?: string;
+  enDescription?: string;
+  /** 卡牌参数，用于替换文案里的 {n} */
+  params?: number[];
 }
 
 /** 挂起项的 kind：等待玩家从监狱牌候选中选一张 */
@@ -1533,7 +1539,12 @@ export function takeJailTurn(
     prompt: `服刑（等级 ${p.jailRank}·${JAIL_RANK_NAMES[p.jailRank]}）：`
       + `从 ${candidates.length} 张监狱牌中选一张，或全部拒绝`,
     options: [
-      ...candidates.map((c) => ({ value: c.cardId, label: `${c.name}——${c.description}` })),
+      ...candidates.map((c) => ({
+        value: c.cardId,
+        // 用显示层：替换 `{n}`、清控制符、中文缺失时回退英文。
+        // 直接用 `c.description` 会显示成「丢弃{1}张卡牌。」这种带占位符的文案。
+        label: `${displayCardName(c)}——${displayCardDescription(c)}`,
+      })),
       { value: 'jailDecline', label: '全部拒绝（刑期 −1，+1 罪恶）' },
     ],
     min: 1,
@@ -1584,7 +1595,10 @@ function drawJailCandidates(state: EngineState, p: EnginePlayer): JailCandidate[
       skipped.push(id);   // 本轮不适用，之后重洗会再轮到
       continue;
     }
-    out.push({ cardId: c.id, name: c.text.name, description: c.text.description });
+    out.push({
+        cardId: c.id, name: c.text.name, description: c.text.description,
+        enName: c.en?.name, enDescription: c.en?.description, params: c.params,
+      });
   }
   // 不适用的牌放回牌堆（保持牌数守恒）
   state.jailDeck.unshift(...skipped);
@@ -1598,7 +1612,10 @@ function drawJailCandidates(state: EngineState, p: EnginePlayer): JailCandidate[
       const c = JAIL_CARDS.find((x) => x.id === id);
       if (!c) continue;
       if ((c.rank ?? 1) > p.jailRank + 1) { state.jailDeck.unshift(id); continue; }
-      fallback.push({ cardId: c.id, name: c.text.name, description: c.text.description });
+      fallback.push({
+        cardId: c.id, name: c.text.name, description: c.text.description,
+        enName: c.en?.name, enDescription: c.en?.description, params: c.params,
+      });
     }
     return fallback;
   }

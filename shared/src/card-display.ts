@@ -12,6 +12,14 @@ import type { ActionCard, ResourceBundle, PriceType, GameCharacter } from './gam
 import { CELL_TYPE_BY_ID, CELL_TYPE_BY_NAME } from './gamedata/index.js';
 import { CHARACTER_ABILITIES, type AbilitySpec } from './engine/abilities.js';
 
+// 文案显示层（`{n}` 替换 / 控制符清理 / 中文缺失回退英文）定义在
+// `display-text.ts`——那边只依赖 gamedata，engine 也能安全使用；
+// 这里转出去，方便 UI 只 import 一个模块。
+export {
+  cleanGameText, displayCardDescription, displayCardName, displayCardText,
+  isIncompleteZh, type CardTextSource,
+} from './display-text.js';
+
 /** 卡牌大类（对应原版旗标） */
 export type CardCategory = 'regular' | 'permanent' | 'secret' | 'criminal';
 

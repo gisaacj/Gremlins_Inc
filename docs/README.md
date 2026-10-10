@@ -263,6 +263,44 @@ import 了 `interp.ts`，反向依赖会**形成循环**，改为就地一行判
 （`StepOrderNum`）**重排** `state.players`，所以 `st.players[0]` **不是** `p0`。
 必须用 `getPlayer(st, id)` 按 id 取人，否则 setup 会改错对象。
 
+### 本轮：文案显示层（`{n}` 占位符 + 中文缺失回退英文）
+
+之前把"中文截断"定性为**只影响显示**，这轮就去修显示层。实测出两个具体缺陷：
+
+| 缺陷 | 影响面 | 表现 |
+|---|---|---|
+| 说明里的 `{n}` 占位符**未被替换** | **78/186** 张卡 | UI 上直接显示「丢弃**{1}**张卡牌。」 |
+| 中文**缺失或只剩标记** | 31 张中文为空 + a015/a099 只给 `[m]`/`[i]` | UI 上显示光秃秃的「[m]」 |
+
+修复方式：新增 `shared/src/display-text.ts`（`cleanGameText` /
+`isIncompleteZh` / `displayCardName` / `displayCardDescription` / `displayCardText`）：
+1. 用卡牌自己的 `params` 替换 `{n}`
+2. 清掉 `\r` 等控制符（原版文案里大量 `\r\r`）
+3. 中文**明确不完整**时回退英文原文
+
+**判据刻意保守**：只抓"空 / 只剩 `[m]` / 没有任何中文或字母数字"三种情况，
+**不比较中英长度**。原因是我最初的启发式用了长度比，结果把
+**140/186** 张卡的正常译名误报成"截断"（「永动机」vs "Perpetuum mobile"）——
+中文信息密度天然高于英文，长度比根本不能用。
+
+#### 三处实现要点
+
+1. **数据层要补 `en` 字段**：`a015` 的语言包英文也只有 `"[m]"`，
+   必须用 `pickFuller(语言包, JSON Description)` 取更完整的那个，
+   否则回退到英文后仍然只得到 `[m]`（实测踩过这个坑）。
+2. **`JailCard` 也要加 `en`**：原先只有 `ActionCard` 有，
+   而监狱牌的选项文案同样需要回退。
+3. **模块分层避免循环依赖**：`display-text.ts` **只依赖 `gamedata`**，
+   因为它要被 `engine/state.ts` 使用（生成玩家可见的选项文案）；
+   若放在 `card-display.ts`（依赖 `engine/abilities.ts`）里就会形成
+   `engine → card-display → engine` 的循环。`card-display.ts` 转出这些函数供 UI 使用。
+
+接入点：`client/src/components/Card.tsx`（卡名/说明/风味）、
+`engine/state.ts` 的监狱牌选项 label、以及交锋用牌 label。
+
+新增测试 `text-display.test.ts`（19 项），其中包含"186 张卡+18 张监狱卡的
+显示说明都不得残留 `{n}`"这类全量断言。
+
 ---
 
 ## 一、重要前提：反编译范围的边界 ⚠️

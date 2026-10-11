@@ -28,7 +28,7 @@ import {
 import { addRes, hasRes, transferRes } from './resources.js';
 import { discardFromHand, drawMisfortune, drawTo, rollDice } from './interp.js';
 import { HAND_SIZE, canPlayCard } from './state.js';
-import { abilitiesOf, excavationCount, hasExcavation, insuranceCost } from './abilities.js';
+import { abilitiesOf, excavationCount, fireAbility, hasExcavation, insuranceCost } from './abilities.js';
 
 // =============================================================
 // 骰子结算表（数据驱动）
@@ -612,17 +612,22 @@ export function doOption(
       addRes(p, 'vote', -1);
       addRes(p, 'money', gain);
       logIt(`在办公楼卖 1 选票，得 ${gain} 金`);
-      // 「办公楼楼主」：其他人卖选票时归他
+      // 「办公楼楼主」（创业者）：**其他玩家**在办公楼卖选票时，那些选票归他。
+      //
+      // ⚠️ 这条能力在数据/引擎里登记的事件是 `officeSellVotes`，但
+      // **从来没有被 fire 过** —— 效果只存在于下面这段硬编码里，
+      // 能力系统（日志、后续钩子）完全不知道它发生过。
+      // 现在两边都做：先让能力系统感知（它只置一个 flag），
+      // 再由这里完成实际的转账，保证行为不变。
       for (const other of state.players) {
         if (other.id === p.id) continue;
-        for (const a of abilitiesOf(other)) {
-          if (a.flag !== 'enterpreneurOwner') continue;
-          transferRes(p, other, 'money', gain);
-          state.log.push({
-            round: state.round, playerId: other.id,
-            text: `角色能力·${a.label}：获得 ${gain} 金`, ts: Date.now(),
-          });
-        }
+        const specs = abilitiesOf(other).filter((a) => a.flag === 'enterpreneurOwner');
+        if (!specs.length) continue;
+        // 让能力系统跑一遍（保持"能力会被触发"的语义与日志一致）
+        fireAbility(state, other.id, 'officeSellVotes', { cellId: p.cellId });
+        // 实际效果：这笔卖选票的钱归楼主
+        transferRes(p, other, 'money', gain);
+        logIt(`角色能力·${specs[0]!.label}：${other.name} 获得 ${gain} 金`);
       }
       return doneUsed(`卖 1 选票，得 ${gain} 金`);
     }
@@ -631,12 +636,19 @@ export function doOption(
       const gain = pr[0] || 200;
       if (p.res.score < 1) return fail('需要 1 齿轮');
       addRes(p, 'score', -1);
-      // 「老练商人」：卖齿轮额外加成
+      // 「老练商人」（商人）：卖齿轮时每个齿轮额外 +N 金。
+      //
+      // ⚠️ 这里原先是"直接读 `flag === 'merchantSell'`"，但
+      // `fireAbility(state, pid, 'marketSell')` **从来没被调用过** ——
+      // 所以这条能力只在这一个硬编码分支里生效，走能力系统的日志/其它钩子
+      // （如 a153「机器商人」按卖齿轮给收入）都拿不到。
+      // 现在补上 `marketSell` 触发。
       let bonus = 0;
       for (const a of abilitiesOf(p)) {
         if (a.flag === 'merchantSell') bonus += a.nums?.[0] ?? 100;
       }
       addRes(p, 'money', gain + bonus);
+      fireAbility(state, p.id, 'marketSell', { cellId: p.cellId });
       logIt(`在市场卖 1 齿轮，得 ${gain + bonus} 金${bonus ? `（含能力加成 ${bonus}）` : ''}`);
       return doneUsed(`卖 1 齿轮，得 ${gain + bonus} 金`);
     }

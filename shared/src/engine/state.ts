@@ -2524,6 +2524,14 @@ export function endTurn(state: EngineState): void {
     if (nxt.skipTurns > 0) {
       nxt.skipTurns -= 1;
       pushLog(state, nxt.id, `跳过本次走牌（剩余 ${nxt.skipTurns}）`);
+      // ── 「跳过走牌」触发的能力 ──
+      //
+      // ⚠️ `skipMove` 在 `AbilityEvent` 里定义了、也有两条能力挂在上面
+      // （小偷「买卖」跳过走牌 +100 金、商人「买卖」+50 金），
+      // 但**引擎从来没 fire 过它** —— 所以这两条能力在实机里完全不会生效。
+      //
+      // 触发点就是这里：玩家因为 `skipTurns` 而跳过本次走牌的那一刻。
+      fireAbility(state, nxt.id, 'skipMove', { cellId: nxt.cellId });
     }
 
     // 每轮结束钩子（「古代机构」+齿轮、「末日时钟」每 6 轮扣分等）

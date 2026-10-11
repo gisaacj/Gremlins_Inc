@@ -1631,10 +1631,25 @@ function handleSelect(
       //     a167 `(id|100|4|-4)` → +100$ / +4& / **-4^**（第三项为负 = 罪恶）
       // 第三项是"齿轮"还是"罪恶"由**符号**决定。
       const o = owner(state, ctx);
-      const nums = slots.filter((s) => s.kind === 'number').map((s) => s.value);
+      // ⚠️ a167「奖励资金」的**动作参数与卡牌参数不一致**：
+      //   动作 = SelectBonus(id|100|4|-4)，卡牌 params = [100, 3, 3]。
+      //   而卡面文案是 "+{1}$或+{2}&或-{3}^"，`{n}` 指向**卡牌** params
+      //   （a081 / a108 两者一致，只有 a167 冲突 → 用文案判定谁对：卡牌 params）。
+      //   所以优先用卡牌 params，取不到才退回动作参数。
+      const actionNums = slots.filter((s) => s.kind === 'number').map((s) => s.value);
+      const cardNums = parseParams(cardParamsOf(ctx) ?? [])
+        .filter((s) => s.kind === 'number')
+        .map((s) => s.value);
+      const nums = cardNums.length >= 3 ? [...cardNums] : [...actionNums];
       const money = nums[0] ?? 0;
       const votes = nums[1] ?? 0;
-      const third = nums[2] ?? 0;
+      // 第三项的**符号**以动作参数为准：a167 的卡牌 `params` 存的是 `3`
+      // （丢了负号），而动作参数是 `-4` —— 卡面文案写的是 `-{3}^`，
+      // 说明语义是"扣 3 点罪恶"。取值用卡牌 params（3），符号用动作（负）。
+      const actionThird = actionNums[2];
+      const third = (actionThird !== undefined && actionThird < 0 && (nums[2] ?? 0) > 0)
+        ? -(nums[2] ?? 0)
+        : (nums[2] ?? 0);
 
       const choice = takeChoice(ctx, kind);
       if (choice) {

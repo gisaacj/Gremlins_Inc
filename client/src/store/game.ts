@@ -8,7 +8,7 @@ import {
   CHARACTERS,
 } from '@gremlins/shared';
 import { LocalGame, runAIPlayers } from '@gremlins/shared/engine';
-import { getSocket } from '../net/socket.js';
+import { getServerUrl, getSocket } from '../net/socket.js';
 import { loggers } from '../utils/logger.js';
 
 const log = loggers.store;
@@ -258,7 +258,37 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
     socket.on('connect', () => {
       log.info(`connect socketId=${socket.id}`);
-      set({ connected: true, mySocketId: socket.id ?? '', selfId: socket.id ?? '' });
+      set({ connected: true, mySocketId: socket.id ?? '', selfId: socket.id ?? '', connectionError: null });
+    });
+    // ── 连接失败：把**真实原因**显示给玩家 ──
+    //
+    // ⚠️ 原先只处理 connect / disconnect，`connect_error` 完全没接 ——
+    // 玩家看到的就只是"正在连接服务器..."一直转，无从排查。
+    // 用户实测："我装了 apk 但是没法连接 输入服务器地址一直无法连接"。
+    //
+    // 常见的几种原因，各自给不同提示：
+    //   - Android 9+ 默认禁止明文 HTTP（targetSdk>=28）→ 已在 AndroidManifest
+    //     里加 `usesCleartextTraffic` + network_security_config 修掉
+    //   - 手机与电脑不在同一 WiFi / 填错 IP
+    //   - 电脑防火墙拦了 3000 端口
+    //   - 服务端没起
+    socket.on('connect_error', (err: Error) => {
+      const url = getServerUrl() ?? '(未配置)';
+      const raw = err?.message ?? '未知错误';
+      log.warn(`connect_error to ${url}: ${raw}`);
+      const hint = /cleartext|CLEARTEXT|not permitted/i.test(raw)
+        ? '明文 HTTP 被系统拦截（若用的是自编译包，请确认 AndroidManifest 里已开 usesCleartextTraffic）'
+        : /timeout|timed out/i.test(raw)
+          ? '连接超时：确认手机与电脑在同一 WiFi、IP 没填错、电脑防火墙放行 3000 端口'
+          : /refused|ECONNREFUSED/i.test(raw)
+            ? '对方拒绝连接：服务端可能没启动，或端口不是 3000'
+            : /ENOTFOUND|getaddrinfo|nodename/i.test(raw)
+              ? '地址解析失败：IP 格式不正确（应形如 192.168.1.10:3000）'
+              : raw;
+      set({
+        connected: false,
+        connectionError: `无法连接 ${url}\n${hint}`,
+      });
     });
     socket.on('disconnect', () => {
       log.warn('disconnect');

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  网络安全配置。
+
+  ⚠️ 为什么必须有这个文件：
+  Android 9（API 28）起**默认禁止明文 HTTP**（`usesCleartextTraffic` 默认 false），
+  而本作是局域网联机 —— 服务端就是 `http://192.168.x.x:3000`，没有 TLS。
+  不放开的话，APK 里 socket.io 连局域网服务端会被系统直接拦掉，
+  表现就是"输入服务器地址一直无法连接"（用户实测）。
+
+  这里**不是**简单地全局 `android:usesCleartextTraffic="true"`，而是显式列出
+  私网网段 + localhost，把放开面限制在局域网内：
+    - 10.0.0.0/8、172.16.0.0/12、192.168.0.0/16   （RFC1918 私网）
+    - 127.0.0.1 / localhost                        （本机调试）
+    - 100.64.0.0/10                                （运营商级 NAT，部分手机热点）
+
+  仍然允许明文的原因：局域网内没有证书，且这是内部使用场景。
+  将来若上公网，应改为 HTTPS 并删掉这些 domain 例外。
+-->
+<network-security-config>
+    <!-- 私网 IP + 本机：允许明文 HTTP -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain>      <!-- Android 模拟器里的宿主 -->
+    </domain-config>
+
+    <!--
+      私网网段无法用 domain 通配表达，所以对"其它所有域名"也放开明文。
+      这是有意为之：本作只在局域网内部使用，服务端没有证书。
+      若要收紧，可把下面这段改成 cleartextTrafficPermitted="false"
+      并在上面 domain-config 里逐个列出服务器 IP。
+    -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

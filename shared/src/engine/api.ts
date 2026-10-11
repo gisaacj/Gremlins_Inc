@@ -66,8 +66,21 @@ function maybeAutoEnd(state: EngineState): ActionResult {
   if (availableOptions(state, pid).length > 0) return ok();
 
   // 没事可做了 → 自动换人
+  //
+  // ⚠️ `nextTurn` 的失败**不能吞掉**。它会先调 `finishTurnActions` 结算欠着的
+  // 格子效果；若那个效果自己挂起（警察格问"付贿赂还是掷骰"、冒险格问保险…），
+  // `nextTurn` 会返回 `{ok:false}`，但 `state.pending` 已经**设好了**。
+  //
+  // 原实现写的是 `r.ok ? ok() : fail(...)` —— 于是在这条路径上：
+  //   1. 挂起被创建
+  //   2. `fail()` 把结果丢掉，`state.pending` 却还留着（或反过来被清掉）
+  //   3. 调用方（`answerChoice`）拿不到挂起 → 界面 prompt=null、手牌全灰
+  //      → **卡死**
+  // 用户实测："移动到警察站点、路过厄运触发完厄运之后，手牌全灰的、卡死在这了"。
+  if (state.pending) return ok(state.pending);
   const r = nextTurn(state);
-  return r.ok ? ok() : fail(r.error ?? '换人失败');
+  if (!r.ok) return state.pending ? ok(state.pending) : fail(r.error ?? '换人失败');
+  return ok();
 }
 
 /** 建立新对局 */

@@ -109,7 +109,7 @@ Move → Conflict → UseCard → UseCell
 ## 验证体系（重点）
 
 测试不是"按报过的 bug 写用例"，而是**按元素穷举成矩阵**。
-5 个矩阵测试 + 44 个专项测试，共 **49 个测试文件 / 684 个 check**：
+6 个矩阵测试 + 44 个专项测试，共 **50 个测试文件 / 702 个 check**：
 
 | 矩阵 | 覆盖对象 | 保证什么 |
 |---|---|---|
@@ -118,6 +118,7 @@ Move → Conflict → UseCard → UseCell
 | `matrix-card-effect` | **全部 250 张卡** | 每张牌打出都有效果（资源/挂起/日志至少一项），无"尚未实现"，需要选择就真挂起 |
 | `matrix-character` | **全部 12 角色 / 50 条能力** | 每条能力都有登记、挂在**会被触发**的事件上、开局与回合都能推进 |
 | `matrix-turn-order` | 顺序 + 不变量 | 落地留账给 UseCell、三条收尾路径一致、强随机压测不卡死 |
+| `matrix-params` | **全部 250 张卡的 `{n}` ↔ `params`** | 下标不越界、替换无残留、替换值正确（按绝对值）、参数能在执行数据里找到 |
 
 ```bash
 # 跑单个矩阵
@@ -126,6 +127,7 @@ npx tsx server/src/__tests__/matrix-cell.test.ts
 npx tsx server/src/__tests__/matrix-card-effect.test.ts
 npx tsx server/src/__tests__/matrix-character.test.ts
 npx tsx server/src/__tests__/matrix-turn-order.test.ts
+npx tsx server/src/__tests__/matrix-params.test.ts
 ```
 
 另外还有三层回归：
@@ -142,6 +144,7 @@ npx tsx server/src/__tests__/matrix-turn-order.test.ts
 - ✅ **186 张行动卡逐张验过"能用于移动"**
 - ✅ **67 格逐格验过"走上去会触发"**
 - ✅ **12 角色 50 条能力逐条验过"挂在会被触发的事件上"**
+- ✅ **250 张卡的 `{n}` 占位符与 `params` 逐处验过一致（335 处）**
 - ✅ 玩家交锋（出价 + 输者被捕）/ 警察格二选一 / 混沌卡 / 选举
 - ✅ 完整中文卡面（250 张；显示层保证无占位符、无裸符号）
 - ✅ AI 补位（出牌 / 移动 / 可选动作 / 混沌卡）
@@ -173,5 +176,5 @@ npx tsx server/src/__tests__/matrix-turn-order.test.ts
 | [`docs/资源系统.md`](docs/资源系统.md) | 6 种资源与符号 |
 | [`docs/交锋与选举.md`](docs/交锋与选举.md) | 交锋出价、选举、镇长 |
 | [`docs/移动端构建.md`](docs/移动端构建.md) | APK 打包步骤 |
-| [`docs/测试矩阵.md`](docs/测试矩阵.md) | **5 个矩阵测试的覆盖范围与跑法** |
+| [`docs/测试矩阵.md`](docs/测试矩阵.md) | **6 个矩阵测试的覆盖范围与跑法** |
 | [`docs/README.md`](docs/README.md) | 逐轮开发记录（最新在最上） |

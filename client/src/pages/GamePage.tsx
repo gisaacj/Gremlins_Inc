@@ -4,7 +4,7 @@ import { useGameStore } from '../store/game.js';
 import { BoardView } from '../components/BoardView.js';
 import { ResourcePanel, PlayerList, LogBox, PermanentPanel, SimpleCardDetail } from '../components/Hud.js';
 import { Card, CardDetail } from '../components/Card.js';
-import { BOARD_VIEW, CARD_BY_ID, CHAOS_CARDS, JAIL_CARDS, displayCardRules, getBoardView } from '@gremlins/shared';
+import { BOARD_VIEW, CARD_BY_ID, CHAOS_CARDS, JAIL_CARDS, displayCardName, displayCardRules, getBoardView } from '@gremlins/shared';
 import type { ActionCard } from '@gremlins/shared';
 import '../styles/game.css';
 import '../styles/cards.css';
@@ -74,6 +74,14 @@ export function GamePage() {
 
   const [paused, setPaused] = useState(false);
 
+  // ── 被查看的对方手牌：支持"看完就关掉" ──
+  //
+  // 用户要求："应该加个关闭按钮，看完了就点了关掉，而不是一直存在"。
+  // 引擎的 `state.revealedHand` **从不清除**（只有新揭示会覆盖），
+  // 所以关闭状态得由界面记；用"揭示者+牌列表"的指纹判断是不是新的一次揭示，
+  // 是新的就重新显示。
+  const [revealedClosed, setRevealedClosed] = useState(false);
+
   // ── 移动端布局 ──
   // 手机上棋盘两侧的"暴乱卡牌 / 状态侧栏"必须让位给棋盘，改成可开合的浮层，
   // 否则棋盘被挤到只剩几十像素（用户反馈"适配不好、信息被遮挡"）。
@@ -96,6 +104,14 @@ export function GamePage() {
   useEffect(() => {
     setTeleportDest(null);
   }, [placeKey, prompt?.message]);
+
+  // 新的一次"查看手牌"要重新显示（关闭状态只对当次有效）
+  const revealedKey = game?.revealedHand
+    ? `${game.revealedHand.ownerId ?? ''}:${game.revealedHand.cardIds.join(',')}`
+    : '';
+  useEffect(() => {
+    if (revealedKey) setRevealedClosed(false);
+  }, [revealedKey]);
 
   if (!game) {
     return (
@@ -351,19 +367,36 @@ export function GamePage() {
                 </div>
               )}
 
-              {/* 被查看的对方手牌（a043 搜身 / a046 清剿行动 / a151 告密者…） */}
-              {game.revealedHand && (
+              {/* 被查看的对方手牌（a043 搜身 / a046 清剿行动 / a151 告密者…）
+                  用户要求：显示**卡牌名称**、点名称看详情、并且要有**关闭按钮**
+                  （原先是把卡面规则截断成 18 字挤在一起，而且一直挂在界面上，
+                   引擎侧的 `revealedHand` 从不清除）。 */}
+              {game.revealedHand && !revealedClosed && (
                 <div className="revealed-hand">
                   <div className="revealed-hand-title">
-                    🔍 {game.revealedHand.ownerName} 的手牌
-                    （{game.revealedHand.cardIds.length} 张）
+                    <span>🔍 {game.revealedHand.ownerName} 的手牌（{game.revealedHand.cardIds.length} 张）</span>
+                    <button
+                      className="revealed-hand-close"
+                      title="关闭"
+                      onClick={() => setRevealedClosed(true)}
+                    >
+                      ✕
+                    </button>
                   </div>
                   <div className="revealed-hand-cards">
-                    {game.revealedHand.cardIds.map((id) => (
-                      <span key={id} className="revealed-hand-card" title={CARD_BY_ID[id]?.text.name ?? id}>
-                        {CARD_BY_ID[id] ? displayCardRules(CARD_BY_ID[id] as ActionCard).slice(0, 18) : id}
-                      </span>
-                    ))}
+                    {game.revealedHand.cardIds.map((id, i) => {
+                      const c = CARD_BY_ID[id];
+                      return (
+                        <button
+                          key={`${id}-${i}`}
+                          className="revealed-hand-card"
+                          onClick={() => setCardDetail(id)}
+                          title="点击查看卡牌详情"
+                        >
+                          {c ? displayCardName(c as ActionCard) : id}
+                        </button>
+                      );
+                    })}
                     {game.revealedHand.cardIds.length === 0 && (
                       <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>（没有手牌）</span>
                     )}

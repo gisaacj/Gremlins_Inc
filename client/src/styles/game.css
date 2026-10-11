@@ -306,3 +306,38 @@
   border: 1px solid rgba(255, 255, 255, 0.12);
   white-space: nowrap;
 }
+
+/* ── 被查看的对方手牌：标题行 + 关闭按钮 + 可点的卡名 ──
+   用户要求："显示的是卡牌名称，然后点击名称展示详情，
+   并且应该加个关闭按钮，看完了就点了关掉，而不是一直存在"。 */
+.revealed-hand-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.revealed-hand-close {
+  flex: 0 0 auto;
+  padding: 0 8px;
+  min-height: 24px;
+  line-height: 1;
+  font-size: 13px;
+  background: transparent;
+  border: 1px solid var(--color-border, #444);
+  border-radius: 4px;
+  color: var(--color-text-muted, #a0a8b8);
+  cursor: pointer;
+}
+.revealed-hand-close:hover {
+  border-color: var(--color-accent, #e94560);
+  color: var(--color-accent, #e94560);
+}
+/* 卡名做成可点按钮（点了看详情） */
+.revealed-hand-card {
+  cursor: pointer;
+  color: var(--color-text, #e8e8e8);
+}
+.revealed-hand-card:hover {
+  border-color: var(--color-accent, #e94560);
+  background: rgba(233, 69, 96, 0.15);
+}

@@ -1617,6 +1617,50 @@ function handleSelect(
         pool.map((id) => ({ value: id, label: CARD_BY_ID[id]?.text.name ?? id })));
     }
 
+    case 'SelectBonus': {
+      // 自己从三个奖励里挑一个（a081「神灯精灵」/ a108「勾结恶魔」/ a167「奖励资金」）。
+      //
+      // ⚠️ 原实现**没有这个分支**，落到 `default` 直接返回 ——
+      // 三张卡"选了等于没选"，一点效果都没有。
+      // 用户实测："勾结恶魔……没让我选，一个也没生效，光给我加了邪恶"。
+      //
+      // 参数形态（对三张卡的文案与 params 逐一核对）：
+      //   ["<条件id>", money, votes, third]
+      //     a081 `(id|150|5|1)`  → +150$ / +5& / +1*
+      //     a108 `(id|500|15|4)` → +500$ / +15& / +4*
+      //     a167 `(id|100|4|-4)` → +100$ / +4& / **-4^**（第三项为负 = 罪恶）
+      // 第三项是"齿轮"还是"罪恶"由**符号**决定。
+      const o = owner(state, ctx);
+      const nums = slots.filter((s) => s.kind === 'number').map((s) => s.value);
+      const money = nums[0] ?? 0;
+      const votes = nums[1] ?? 0;
+      const third = nums[2] ?? 0;
+
+      const choice = takeChoice(ctx, kind);
+      if (choice) {
+        const pick = choice[0];
+        if (pick === 'money') {
+          addRes(o, 'money', money);
+          log(state, o.id, `${ctx.source}：选择 +${money} 金钱`);
+        } else if (pick === 'vote') {
+          addRes(o, 'vote', votes);
+          log(state, o.id, `${ctx.source}：选择 +${votes} 选票`);
+        } else if (pick === 'third') {
+          const key: ResourceKey = third >= 0 ? 'score' : 'malice';
+          addRes(o, key, third);
+          log(state, o.id, `${ctx.source}：选择 ${third >= 0 ? '+' : ''}${third} ${RES_LABEL[key]}`);
+        }
+        return undefined;
+      }
+      if (money === 0 && votes === 0 && third === 0) return undefined;
+      const rel = (n: number, r: ResourceKey) => `${n >= 0 ? '+' : ''}${n} ${RES_LABEL[r]}`;
+      return makePending(ctx, kind, '选择一个奖励', [
+        { value: 'money', label: rel(money, 'money') },
+        { value: 'vote', label: rel(votes, 'vote') },
+        { value: 'third', label: rel(third, third >= 0 ? 'score' : 'malice') },
+      ]);
+    }
+
     case 'NameLocation': {
       if (pre) { ctx.scratch = { ...ctx.scratch, placeId: pre[0] }; return undefined; }
       const buildings = buildingCellIds(state);

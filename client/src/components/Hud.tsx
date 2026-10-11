@@ -2,7 +2,7 @@ import { useEffect, useRef, useMemo } from 'react';
 import type { SerializedGameState, SerializedPlayer } from '@gremlins/shared';
 import {
   CHARACTER_BY_ID, CARD_BY_ID, MISFORTUNE_CARDS, JAIL_CARDS, CHAOS_CARDS,
-  characterAbilities,
+  characterAbilities, displayCardRules,
 } from '@gremlins/shared';
 import { PLAYER_COLORS, BOARD_VIEW, getBoardView } from '@gremlins/shared';
 import { useState } from 'react';
@@ -134,7 +134,10 @@ export function PermanentPanel({ permanents }: { permanents: string[] }) {
             >
               <span className="perm-name">{card.text?.name ?? card.name}</span>
               {card.text?.description && (
-                <span className="perm-desc">{card.text.description.slice(0, 50)}</span>
+                // ⚠️ 必须走显示层：raw `text.description` 里 121/250 张卡带
+                // `{n}` 占位符或裸符号（`$ & ^ * | ~`），直接显示就是天书
+                // （用户报的"通货膨胀的显示还是看不懂的字符：每个玩家-{1}%$"）。
+                <span className="perm-desc">{displayCardRules(card).slice(0, 50)}</span>
               )}
             </div>
           );
@@ -242,7 +245,8 @@ export function SimpleCardDetail({ cardId, onClose }: { cardId: string; onClose:
         </div>
         <h3>{card.text?.name ?? cardId}</h3>
         {card.text?.description && (
-          <div className="card-detail-rules">{card.text.description}</div>
+          // 同上：必须走显示层，否则 121/250 张卡会显示 `{n}` 与裸符号
+          <div className="card-detail-rules">{displayCardRules(card)}</div>
         )}
         {card.text?.flavor && (
           <div className="card-detail-flavor">{card.text.flavor}</div>

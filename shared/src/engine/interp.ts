@@ -809,10 +809,20 @@ function execAction(
 
     // ============ 移动 ============
     case 'RandomTeleport': {
+      // 随机传送到**参数指定的那几个格子类型之一**。
+      //
+      // ⚠️ 原实现直接 `mapCellIds(state)` 取全部格子随机挑 —— 完全无视参数。
+      // m017「一反常态」的参数是 地狱/垃圾场/市场/工厂/赌场 五个格子类型，
+      // 结果却能随机落到棋盘上任意一格（用户报的"可选传送不受限制"的同类问题）。
       const o = owner(state, ctx);
-      const ids = mapCellIds(state);
-      if (!ids.length) return undefined;
-      o.cellId = ids[Math.floor(random(state) * ids.length)];
+      const rawParams = slots.map((s) => String(s.value)).filter(Boolean);
+      const allowed = teleportTargetCells(state, rawParams);
+      // 参数解析不出格子时（如 `None`）才退回全图随机，避免卡住
+      const pool = allowed.length
+        ? allowed.map((c) => c.id)
+        : mapCellIds(state);
+      if (!pool.length) return undefined;
+      o.cellId = pool[Math.floor(random(state) * pool.length)]!;
       log(state, o.id, `随机传送到 ${cellLabel(getCell(state, o.cellId))}`);
       return undefined;
     }
@@ -1313,14 +1323,26 @@ function handleSelect(
   switch (kind) {
     case 'SelectOpponent': {
       if (pre) { ctx.targets = pre; return undefined; }
-      const others = state.players.filter((p) => p.id !== o.id);
+      // ── 候选玩家：默认"其他玩家"，但 `All` 表示**连自己在内** ──
+      //
+      // a179「昂贵的订单」的文案是「选择任意玩家（**包括你**）」，
+      // 它的参数正是 `All`（`D89C02CED0433103` 是"任意玩家"的条件 id，
+      // 末位 `All` 是范围）。早先这里**完全忽略参数**、一律排除自己，
+      // 于是 a179 永远选不到自己 —— 与卡面矛盾。
+      const params = slots.map((s) => String(s.value));
+      const includeSelf = params.some((v) => v === 'All');
+      const others = includeSelf
+        ? state.players.slice()
+        : state.players.filter((p) => p.id !== o.id);
       if (others.length === 0) { ctx.targets = [o.id]; return undefined; }
-      if (others.length === 1) { ctx.targets = [others[0].id]; return undefined; }
-      // 带选择条件的形态（如"罪恶最高"）：参数为文本 id，暂按普通选择处理
-      return makePending(ctx, kind, `选择一名玩家（${ctx.source}）`,
+      // 只有 1 个候选且不含自己时自动选中；含自己时不自动选（否则等于跳过选择）
+      if (others.length === 1 && !includeSelf) { ctx.targets = [others[0].id]; return undefined; }
+      return makePending(ctx, kind,
+        includeSelf ? `选择一名玩家（${ctx.source}，包括你）` : `选择一名玩家（${ctx.source}）`,
         others.map((p) => ({
           value: p.id,
-          label: `${nameOf(p)}（${RES_LABEL.malice} ${p.res.malice}，${RES_LABEL.money} ${p.res.money}）`,
+          label: `${nameOf(p)}${p.id === o.id ? '（你）' : ''}`
+            + `（${RES_LABEL.malice} ${p.res.malice}，${RES_LABEL.money} ${p.res.money}）`,
         })));
     }
 

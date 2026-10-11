@@ -9,7 +9,7 @@ import {
   CARD_BY_ID, CELL_TYPE_BY_ID, CHAOS_CARDS, cellLabel, getCell, getMap, getPlayer,
 } from './model.js';
 import {
-  canAffordCard, canMoveWithCard, canPlayCard, createState, endTurn,
+  canAffordCard, canMoveWithCard, canPlayCard, createState, endTurn, moveCostOf,
   finishTurnActions, resolveLanding, resolvePending, startMove, takeJailTurn,
 } from './state.js';
 import type { EngineInitArgs } from './state.js';
@@ -671,11 +671,36 @@ export function nextTurn(state: EngineState): { ok: boolean; error?: string; gam
 }
 
 // ---------------------------------------------------------------- 给 AI 的只读视图
+/**
+ * 这张牌现在能否**真的**用来移动。
+ *
+ * = 结构上可移动（在手牌、有移动点、本回合还没走过）
+ *   **且**付得起 `[m]` 段的金钱代价。
+ *
+ * ⚠️ 别只调 `canMoveWithCard`：它只看结构、不看代价 ——
+ * 于是 a015「永动机」（`[m] -20$`）在只有 2$ 时也被判成"可移动"，
+ * 界面给出这张牌（点了必然失败），AI 与测试脚本还会反复尝试
+ * （实测对局模拟直接报出 `startMove: 付不起用这张牌移动的代价`）。
+ */
+export function canAffordToMove(
+  state: EngineState,
+  p: EnginePlayer,
+  cardId: string,
+): { ok: boolean; reason?: string } {
+  const chk = canMoveWithCard(p, cardId);
+  if (!chk.ok) return chk;
+  const due = moveCostOf(state, p, cardId);
+  if (due > 0 && p.res.money < due) {
+    return { ok: false, reason: `付不起用这张牌移动的代价（需要 ${due}，你有 ${p.res.money}）` };
+  }
+  return { ok: true };
+}
+
 /** 当前玩家可用来移动的牌 */
 export function movableCards(state: EngineState, playerId: string): string[] {
   const p = getPlayer(state, playerId);
   if (!p) return [];
-  return p.hand.filter((id) => canMoveWithCard(p, id).ok);
+  return p.hand.filter((id) => canAffordToMove(state, p, id).ok);
 }
 
 /** 当前玩家可在本地打出的效果牌 */

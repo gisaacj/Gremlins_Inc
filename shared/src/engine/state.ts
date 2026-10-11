@@ -335,6 +335,63 @@ export function canPlayCard(
  *
  * @returns 走完返回 done；需要选路时返回 needChoice
  */
+/**
+ * 卡牌 `actions` 里 `MOVE` **之前**的动作 —— 即"打出效果"那一段。
+ *
+ * 卡牌数据把两段拼在一起：`[ ...打出效果..., MOVE, ...仅用于移动的效果... ]`。
+ * `moveActions` 是 `MOVE` **之后**的部分；这个函数给 `MOVE` **之前**的部分。
+ *
+ * ⚠️ `Perm_*` / `Perm_Discard` 是**永久卡注册**动作，不是一次性效果：
+ *   - a140「恶魔雕像」：`Perm_EvilBonus(40)` 把"打出给^的牌时+40$"登记为永久规则
+ *   - a123「星际电梯」：`Perm_AstralElevator(1)` 登记"可从银行直达天界"
+ *   - a121「机械帮手」：`Perm_Discard(1)` 登记"到站无牌可打时弃1张"
+ * 这些只在"打出行动"时登记，**用于移动时不该登记**（移动完这张牌就进弃牌堆了）。
+ */
+export function preMoveActions(card: CardAction[] | undefined): CardAction[] {
+  const acts = card ?? [];
+  const mi = acts.findIndex((a) => String(a.type) === 'MOVE');
+  if (mi < 0) return [];
+  return acts.slice(0, mi);
+}
+
+
+/**
+ * 用这张牌移动时需要**先付得起的钱**（`[m]` 段里的金钱代价）。
+ *
+ * 用户明确要求："这个效果你得放在 startMove 之前 —— 因为有些牌如果要
+ * 支付金钱才能移动，没钱就不能用它移动了"。
+ *
+ * 目前带金钱代价的移动牌：
+ *   a015 永动机   `[m] -20$`
+ *   a024 翻筋斗   `[m] -50$`
+ *   a129 贿赂有道 `[m] Pay ~`（金额随罪恶变化）
+ *   a140 恶魔雕像 `[m] -50$`
+ *
+ * 注意 a172「认错」的 `[m]` 代价是**选票**、a140 还有 -1 罪恶 ——
+ * 那些不是"付不起就不能动"的门槛（原版只对金钱做门槛）。
+ */
+export function moveCostOf(state: EngineState, p: EnginePlayer, cardId: string): number {
+  const card = CARD_BY_ID[cardId];
+  if (!card) return 0;
+  let due = 0;
+  for (const a of card.moveActions ?? []) {
+    const type = String(a.type);
+    if (type !== 'OpponentLoseMoney') continue;
+    const params = a.params ?? [];
+    // `Bribe`：金额 = 该玩家当前贿赂额 × 倍率
+    if (params.includes('Bribe')) {
+      const mult = Number(params.find((x) => /^\d+$/.test(x)) ?? 1) || 1;
+      due += bribeAmount(state, p) * mult;
+      continue;
+    }
+    // 正数 = 要扣钱（负数 = 给钱，不算门槛）
+    for (const x of params) {
+      if (/^\d+$/.test(x) && Number(x) > 0) due += Number(x);
+    }
+  }
+  return due;
+}
+
 export function startMove(
   state: EngineState,
   playerId: string,
@@ -364,6 +421,18 @@ export function startMove(
     if (state.pending) return { ok: false, reason: '有未完成的决策' };
     const chk = canMoveWithCard(p, cardId);
     if (!chk.ok) return chk;
+
+    // ── 「付不起就不能用它移动」──
+    //
+    // 用户明确要求："这个效果你得放在 startMove 之前 —— 因为有些牌如果要
+    // 支付金钱才能移动，没钱就不能用它移动了"。
+    // 例：a015「永动机」`[m] -20$`、a024「翻筋斗」`[m] -50$`、
+    //     a129「贿赂有道」`[m] Pay ~`。
+    const due = moveCostOf(state, p, cardId);
+    if (due > 0 && p.res.money < due) {
+      return { ok: false, reason: `付不起用这张牌移动的代价（需要 ${due}，你有 ${p.res.money}）` };
+    }
+
     removeFromHand(state, p, cardId);
     state.discard.push(cardId);
     p.lastMoveCardId = cardId;

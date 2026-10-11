@@ -7,7 +7,7 @@
 // =============================================================
 import { CARD_BY_ID, CHARACTERS, mustCurrentPlayer } from '@gremlins/shared/engine';
 import {
-  canMoveWithCard, canPlayCard, chaosOptions, createState, endTurn, playChaosCard,
+  canAffordToMove, canMoveWithCard, canPlayCard, chaosOptions, createState, endTurn, playChaosCard,
   playEffectCard, resolvePending, startMove, takeJailTurn,
 } from '@gremlins/shared/engine';
 import type { EngineState, PendingChoice } from '@gremlins/shared/engine';
@@ -182,7 +182,7 @@ export function runAutoGame(opts: AutoGameOptions): AutoGameResult {
 
     // 3) 移动（挑第一张可移动牌）
     void playedEffect;
-    const playable = p.hand.filter((id) => canMoveWithCard(p, id).ok);
+    const playable = p.hand.filter((id) => canAffordToMove(state, p, id).ok);
     const moveCard = playable[0];
     if (moveCard) {
       moveActions++;

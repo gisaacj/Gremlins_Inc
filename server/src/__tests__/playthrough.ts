@@ -8,7 +8,7 @@
 // =============================================================
 import { CARD_BY_ID, CHARACTERS, cellLabel, getCell, mustCurrentPlayer } from '@gremlins/shared/engine';
 import {
-  canMoveWithCard, canPlayCard, createState, endTurn, playEffectCard,
+  canAffordToMove, canMoveWithCard, canPlayCard, createState, endTurn, playEffectCard,
   resolvePending, startMove, takeJailTurn,
 } from '@gremlins/shared/engine';
 import type { EngineState } from '@gremlins/shared/engine';
@@ -132,9 +132,9 @@ function takeTurn(s: EngineState): void {
   }
 
   // 3) 移动（挑一张能打出的移动牌）
-  const playable = p.hand.filter((id) => canMoveWithCard(p, id).ok);
+  const playable = p.hand.filter((id) => canAffordToMove(state, p, id).ok);
   if (!playable.length) {
-    const reasons = p.hand.map((id) => canMoveWithCard(p, id).reason ?? '可打出');
+    const reasons = p.hand.map((id) => canAffordToMove(state, p, id).reason ?? '可打出');
     for (const r of reasons) bump(moveFailReasons, r.replace(/：.*/, ''));
   }
   const moveCard = playable[0];

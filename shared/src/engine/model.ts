@@ -21,6 +21,14 @@ export {
   JAIL_CARDS, MISFORTUNE_CARDS, CHAOS_CARDS, CELL_TYPES,
   CELL_TYPE_BY_ID, CELL_TYPE_BY_NAME, BOARD_MAPS, NORMAL_MAP, CUSTOM_MAP, GAME_CONST,
 };
+/** 手牌上限（原版手牌恒为 6 张）
+ *
+ * 放在 `model.ts`（叶子模块）而不是 `state.ts`，是为了让 `interp.ts`
+ * 也能直接用 —— `interp.ts` 不能 import `state.ts`，那会形成循环依赖
+ * （`state.ts` 已经 import 了 interp 的 `runActions` / `random` 等）。
+ * `state.ts` 仍然对外 re-export，调用方无感。
+ */
+export const HAND_SIZE = 6;
 export type {
   ActionCard, BoardCell, BoardMap, GameCharacter, JailCard,
   MisfortuneCard, ChaosCard, CellTypeDef, ResourceBundle, CardAction,

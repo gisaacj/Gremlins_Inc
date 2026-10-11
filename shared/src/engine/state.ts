@@ -42,8 +42,15 @@ export interface EngineInitArgs {
   seed?: number;
 }
 
-/** 起手手牌数 */
-export const HAND_SIZE = 6;
+/**
+ * 起手手牌数 / 手牌上限。
+ *
+ * ⚠️ 定义已移到 `model.ts`（叶子模块），这里**只做 re-export**。
+ * 原因是 `interp.ts` 也需要它，而 `interp.ts` 不能 import `state.ts`
+ * （`state.ts` 已经 import 了 interp 的 `runActions` / `random`，会成环）。
+ */
+import { HAND_SIZE } from './model.js';
+export { HAND_SIZE };
 
 /** 取原版常量，带兜底 */
 function constNum(key: string, fallback: number): number {

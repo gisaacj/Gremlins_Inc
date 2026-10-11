@@ -16,6 +16,7 @@ import {
   CARD_BY_ID, CHARACTER_BY_ID, JAIL_CARDS, MISFORTUNE_CARDS, cellLabel, characterName, getCell, getMap,
 } from './model.js';
 import { STRINGS } from '../gamedata/strings.js';
+import { HAND_SIZE } from './model.js';
 import { extraBribeFrom, fireTrigger as firePermTrigger } from './permanents.js';
 import { bribeModifier, breathingTaxFrom, fireAbility } from './abilities.js';
 import { collectButtons } from './dialog.js';
@@ -1548,26 +1549,87 @@ function handleSelect(
     }
 
     case 'SelectDeckCard': {
+      // 参数形态：`["<id>", 数量, 保留数 | "Hand", (来源 "Junk")?, ...]`
+      //
+      // ⚠️ 原实现只读第一个数字当"要选几张"，忽略了**保留数**与**来源牌堆**：
+      //   a004「自主选购」`(id|10|1)`      → "抽10张，保留1张" 却要求选满 10 张
+      //   a053「有趣的发现」`(id|10|1|Junk|)` → "从**弃牌堆**取" 却从牌堆顶取
+      //   a078「古代经文」`(id|6|Hand)`     → "抽6张加入手牌，保留6张"
+      const source = slots.find((s) => s.kind === 'tag' && String(s.value) === 'Junk')
+        ? 'junk' : 'deck';
+      // 第二个数字是"保留几张"；`Hand` 这种 tag 表示"直接进手牌、不挑"
+      const second = slots.filter((s) => s.kind === 'number')[1];
+      const keepTag = slots.find((s) => s.kind === 'tag' && String(s.value) === 'Hand');
+      const keep = keepTag ? 0 : (second?.value ?? 1);
+
+      const n = firstNumber(slots, 1) || 1;
+      // 来源牌堆（弃牌堆取**最后** n 张）
+      const pile = source === 'junk' ? state.discard : state.deck;
+      const pileName = source === 'junk' ? '弃牌堆' : '牌堆';
+
+      // ── 重放：玩家已选好保留哪几张 ──
       if (pre) {
-        // 玩家已选好牌：从牌堆移除并加入手牌（替代正常补抽）
-        const cardId = pre[0];
-        const idx = state.deck.lastIndexOf(cardId);
-        if (idx >= 0) {
-          state.deck.splice(idx, 1);
-          owner(state, ctx).hand.push(cardId);
-          log(state, ctx.ownerId, `${ctx.source}：从牌堆选得「${CARD_BY_ID[cardId]?.text.name ?? cardId}」`);
+        // 这一批牌在挂起时存进了 scratch（跨挂起必须快照，见 handleAuction 的注释）
+        const rawSample = String(ctx.scratch?.['deckSample'] ?? '').split(',').filter(Boolean);
+        const picked = pre.filter(Boolean);
+        const o = owner(state, ctx);
+        for (const id of rawSample) {
+          const idx = pile.lastIndexOf(id);
+          if (idx < 0) continue;          // 已经不在来源牌堆
+          pile.splice(idx, 1);
+          if (picked.includes(id)) {
+            o.hand.push(id);
+            log(state, o.id, `${ctx.source}：保留「${CARD_BY_ID[id]?.text.name ?? id}」`);
+          } else {
+            // 没保留的 → 进弃牌堆（卡面："Keep 1, **discard the rest**"）
+            state.discard.push(id);
+          }
         }
-        ctx.scratch = { ...ctx.scratch, deckCardId: cardId };
+        // 手牌上限（a078「古代经文」"Keep 6, discard the rest."）
+        while (o.hand.length > HAND_SIZE) {
+          const extra = o.hand.pop()!;
+          state.discard.push(extra);
+        }
+        ctx.scratch = { ...ctx.scratch, deckCardId: picked[0] };
         return undefined;
       }
-      const n = firstNumber(slots, 1) || 1;
-      const sample = state.deck.slice(-Math.min(n, state.deck.length));
-      if (!sample.length) return undefined;
-      return makePending(ctx, kind, `从牌堆选择 ${n} 张牌`,
-        sample.map((id) => {
-          const c = CARD_BY_ID[id];
-          return { value: id, label: c ? `${c.text.name}（移动 ${c.move}）` : id };
-        }), { min: n, max: n });
+
+      const sample = source === 'junk'
+        ? pile.slice(-Math.min(n, pile.length)).reverse()
+        : pile.slice(-Math.min(n, pile.length));
+      if (!sample.length) {
+        log(state, ctx.ownerId, `${ctx.source}：${pileName}是空的`);
+        return undefined;
+      }
+      const label = (id: string) => {
+        const c = CARD_BY_ID[id];
+        return c ? `${c.text.name}（移动 ${c.move}）` : id;
+      };
+
+      // `keep <= 0`（`Hand` 形态）：全部进手牌，不需要挑
+      if (keep <= 0) {
+        const o = owner(state, ctx);
+        for (const id of sample) {
+          const idx = pile.lastIndexOf(id);
+          if (idx >= 0) pile.splice(idx, 1);
+          o.hand.push(id);
+        }
+        // 手牌上限：多余的进弃牌堆
+        // （a078「古代经文」"Add 6 cards to your hand. Keep 6, discard the rest."）
+        while (o.hand.length > HAND_SIZE) {
+          const extra = o.hand.pop()!;
+          state.discard.push(extra);
+        }
+        log(state, o.id, `${ctx.source}：获得 ${sample.length} 张牌，手牌保持 ${HAND_SIZE} 张`);
+        return undefined;
+      }
+
+      // 记下这一批，重放时才知道"其余"是哪些
+      ctx.scratch = { ...ctx.scratch, deckSample: sample.join(',') };
+      return makePending(ctx, kind,
+        `从${pileName}选择 ${keep} 张保留（其余弃掉）`,
+        sample.map((id) => ({ value: id, label: label(id) })),
+        { min: keep, max: keep });
     }
 
     case 'SelectPermanent': {

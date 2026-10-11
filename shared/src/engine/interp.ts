@@ -324,6 +324,44 @@ function shuffleInPlace(state: EngineState, arr: string[]): void {
   }
 }
 
+/**
+ * 把出牌者挑好的那张厄运卡**指定**给目标。
+ *
+ * 与 `drawMisfortune`（从牌堆顶随机抽）不同：这里是"从 N 张里挑 1 张"，
+ * 所以要按 id 从牌堆里**取走**那一张，再套用它的效果。
+ */
+function resolveMisfortunePick(
+  state: EngineState,
+  ctx: ActionContext,
+  cardId: string,
+  targets: EnginePlayer[],
+): RunResult | undefined {
+  const idx = state.misfortuneDeck.lastIndexOf(cardId);
+  if (idx >= 0) state.misfortuneDeck.splice(idx, 1);
+  const card = MISFORTUNE_CARDS.find((c) => c.id === cardId);
+  if (!card) return undefined;
+
+  for (const tgt of targets) {
+    // 获得厄运前钩子（「幸运药水」之类可以弃置自身代替）
+    const preFlags: Record<string, string | number | boolean> = {};
+    firePermTrigger(state, 'mustGetMisfortune', { actorId: tgt.id, flags: preFlags });
+    if (preFlags.misfortuneSkipped) continue;
+    log(state, tgt.id, `厄运「${card.text.name}」：${card.text.description ?? ''}`);
+    if (card.actions?.length) {
+      const r = runActions(state, {
+        actions: card.actions,
+        index: 0,
+        targets: [tgt.id],
+        ownerId: tgt.id,
+        source: `厄运「${card.text.name}」`,
+        sourceCardId: card.id,
+      });
+      if (r.status === 'pending') return r;
+    }
+  }
+  return undefined;
+}
+
 export function drawMisfortune(state: EngineState, p: EnginePlayer): void {
   // 获得厄运前钩子：永久卡可能以弃置自身代替（如「幸运药水」）
   const preFlags: Record<string, string | number | boolean> = {};
@@ -698,9 +736,36 @@ function execAction(
       return handleResourceLoss(state, ctx, type, slots);
 
     case 'OpponentGetMisfortune': {
-      const n = firstNumber(slots, 1) || 1;
-      for (const tgt of targetPlayers(state, ctx)) for (let k = 0; k < n; k++) drawMisfortune(state, tgt);
-      return undefined;
+      // 卡面（a098「栽赃陷害！」/a097）："they get a Misfortune
+      // (**your choice, 1 from {1}**)"。
+      //
+      // ⚠️ 原实现把参数 N 当成"抽 N 张给目标"，于是 N=2 时目标**连吃两张厄运**
+      // （实测厄运牌堆 40 → 38）。正确语义是：**翻出 N 张让出牌者挑 1 张**。
+      const o = owner(state, ctx);
+      const n = Math.max(1, firstNumber(slots, 1) || 1);
+      const chosen = takeChoice(ctx, type);
+
+      // 首次：翻 N 张给玩家挑
+      if (!chosen) {
+        if (state.misfortuneDeck.length < n) state.misfortuneDeck = buildMisfortuneDeck(state);
+        const pool = state.misfortuneDeck.slice(-n);      // 只"看"，先不拿走
+        if (pool.length === 0) return undefined;
+        const targets = targetPlayers(state, ctx);
+        ctx.scratch = { ...ctx.scratch, mfTargets: targets.map((t) => t.id).join(',') };
+        if (pool.length === 1) {
+          // 只有一张就不用问
+          return resolveMisfortunePick(state, ctx, pool[0]!, targets);
+        }
+        return makePending(ctx, type, `为对手挑 1 张厄运（从 ${pool.length} 张里选）`,
+          pool.map((id) => ({
+            value: id,
+            label: `「${MISFORTUNE_CARDS.find((c) => c.id === id)?.text.name ?? id}」`,
+          })));
+      }
+
+      // 重放：玩家已挑好
+      const targets = targetPlayers(state, ctx);
+      return resolveMisfortunePick(state, ctx, chosen[0]!, targets);
     }
 
     case 'OpponentArrest': {
@@ -1479,10 +1544,49 @@ function handleSelect(
     }
 
     case 'SelectPermanent': {
-      if (pre) { ctx.scratch = { ...ctx.scratch, permanentId: pre[0] }; return undefined; }
-      const pool = state.players.flatMap((p) => p.permanents);
+      // 候选范围由参数决定：
+      //   `Self`       → 只列**自己**的永久卡（a161「永久抵押」/c001「供奉」）
+      //   `Confiscate` → 只列**其他玩家**的（a042「没收」"of any other player"，
+      //                  而且效果是"夺过来"而不是摧毁）
+      //   其它/`All`   → 全部（a021「奔跑的炸弹」"of any player" / a111「进贡暴乱」）
+      const scope = slots.map((s) => String(s.value));
+      const o = owner(state, ctx);
+      const confiscate = hasTag(slots, 'Confiscate');
+      const isOther = confiscate || scope.some((v) => /^(Other|Opponent)$/i.test(v));
+      const isSelf = scope.some((v) => /^Self$/i.test(v));
+
+      if (pre) {
+        // ── 结算选中的那张 ──
+        //
+        // ⚠️ 原实现只把 id 写进 scratch 就结束，**没有任何后续动作**：
+        // `Destroy` / `Confiscate` 参数被完全忽略，牌也就"选了等于没选"。
+        const id = pre[0]!;
+        const from = state.players.find((pl) => pl.permanents.includes(id));
+        if (!from) { ctx.scratch = { ...ctx.scratch, permanentId: id }; return undefined; }
+        const i = from.permanents.indexOf(id);
+        from.permanents.splice(i, 1);
+        if (confiscate) {
+          o.permanents.push(id);
+          log(state, o.id, `没收了 ${nameOf(from)} 的永久卡「${CARD_BY_ID[id]?.text.name ?? id}」`);
+        } else {
+          state.discard.push(id);
+          log(state, o.id, `摧毁了 ${nameOf(from)} 的永久卡「${CARD_BY_ID[id]?.text.name ?? id}」`);
+        }
+        ctx.scratch = { ...ctx.scratch, permanentId: id };
+        return undefined;
+      }
+
+      const owners = isSelf
+        ? state.players.filter((p) => p.id === o.id)
+        : isOther
+          ? state.players.filter((p) => p.id !== o.id)
+          : state.players;
+      const pool = owners.flatMap((p) => p.permanents);
       if (!pool.length) return undefined;
-      return makePending(ctx, kind, '选择一张永久卡',
+      const label = confiscate ? '选择要没收的其他玩家的永久卡'
+        : isSelf ? '选择自己的一张永久卡'
+          : '选择一张永久卡';
+      return makePending(ctx, kind, label,
         pool.map((id) => ({ value: id, label: CARD_BY_ID[id]?.text.name ?? id })));
     }
 
@@ -1495,8 +1599,9 @@ function handleSelect(
     }
 
     case 'Teleport': {
-      // Teleport(Card)：传送到"这张牌可打出的地点"
       const tag = slots.find((s) => s.kind === 'tag')?.value;
+
+      // Teleport(Card)：传送到"这张牌可打出的地点"
       if (tag === 'Card') {
         const cardId = ctx.scratch?.sourceCardId ?? o.lastMoveCardId;
         const card = cardId ? CARD_BY_ID[cardId] : undefined;
@@ -1510,6 +1615,22 @@ function handleSelect(
         }
         return undefined;
       }
+
+      // Teleport(Opponent)：传送到**所选对手所在的地方**
+      //
+      // ⚠️ 原实现只特判了 `Card`，`Opponent` 落到下面的兜底分支 →
+      // **列出地图上全部 67 格**（a171「荣誉护送」，卡面是
+      // "Choose any other player: teleport to their place"）。
+      // 这是用户报的"可选传送不受限制"的同一族问题。
+      if (tag === 'Opponent') {
+        const tgt = state.players.find((p) => ctx.targets.includes(p.id) && p.id !== o.id)
+          ?? state.players.find((p) => ctx.targets.includes(p.id));
+        if (!tgt) { log(state, o.id, `${ctx.source}：没有可跟随的对手`); return undefined; }
+        o.cellId = tgt.cellId;
+        log(state, o.id, `传送到 ${nameOf(tgt)} 所在处（${cellLabel(getCell(state, tgt.cellId))}）`);
+        return undefined;
+      }
+
       // params 可能是 cellType ID（十六进制），需要转换后查格子。
       //
       // ⚠️ 这里原先写成 `if (cellTypeIds.length > 0 && !pre)` ——

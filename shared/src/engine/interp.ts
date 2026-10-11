@@ -799,13 +799,28 @@ function execAction(
     }
 
     case 'OpponentShowHand': {
-      const value = firstNumber(slots, 0);
+      // 参数形态：`["<id>", 数值..., <tag>...]`
+      //
+      // ⚠️ 原先只实现了 3 个 tag（`SecretPay` / `CellPay` / `Discard`），
+      // 其余 10 个被静默忽略 —— 于是 a128「开诚骗术」、a151「告密者」、
+      // a176「公开性」、a177「满堂红」、a063「诚信交易」、m023「大公无私」
+      // 这些卡的效果**一个都没生效**。
+      // ⚠️ 数值一律**优先取卡牌 `params`**。
+      //
+      // 动作 params 里的数字不可靠：a063「诚信交易」动作写成
+      // `(id|0|Exchange|Pay)`（数值是 **0**），而真正的金额在
+      // `card.params = [30]` 里 —— 若优先用动作 params，`Pay` 就被判成 0 而跳过。
+      // a128 `["All","Confess"]` 更是连数字都没有。
+      // （a043/a048 恰好两者一致，所以只有 a063 暴露出来。）
+      const nums = parseParams(cardParamsOf(ctx) ?? [])
+        .filter((s) => s.kind === 'number').map((s) => s.value);
+      const value = nums[0] ?? 0;
+      const value2 = nums[1] ?? 0;
       const tags = slots.filter((s): s is { kind: 'tag'; value: string } => s.kind === 'tag').map((s) => s.value);
       const o = owner(state, ctx);
       for (const tgt of targetPlayers(state, ctx)) {
         log(state, o.id, `查看了 ${nameOf(tgt)} 的手牌`);
         // 把被查看的手牌记下来，界面才能真的显示出来。
-        // ⚠️ 原先只写日志，玩家看不到对方的牌（用户 bug #4）。
         // 自己的手牌（SelectSelf + 揭示类卡）不必记 —— 本来就看得见。
         if (tgt.id !== o.id) {
           state.revealedHand = {
@@ -815,12 +830,26 @@ function execAction(
             cardIds: [...tgt.hand],
           };
         }
+        // 数一数手牌里的罪恶卡 / 秘密卡。
+        //
+        // ⚠️ 搞清"数谁的牌"：`Confess` / `SamePointsBonus` / `Contraband`
+        // 的文案都是「揭开**你的**手牌」→ 数**出牌者自己**的；
+        // 而 `SecretPay` / `CellPay` / `Discard` / `Snitch` / `SelectCards`
+        // 是查看**对手**的手牌 → 数目标的。
+        // （判据：这三种 tag 的卡，ShowHand 之前的动作都是 `SelectSelf`，
+        //  其余都是 `SelectOpponent`。逐一核对过 13 张卡。）
+        const countFlags = (hand: readonly string[]) => ({
+          criminal: hand.filter((id) => CARD_BY_ID[id]?.criminal).length,
+          secret: hand.filter((id) => CARD_BY_ID[id]?.secret).length,
+        });
+        const tgtFlags = countFlags(tgt.hand);
+        const ownFlags = countFlags(o.hand);
+        const criminal = tgtFlags.criminal;
+        const secret = tgtFlags.secret;
+
         if (tags.includes('SecretPay')) {
-          const n = tgt.hand.filter((id) => {
-            const c = CARD_BY_ID[id];
-            return c?.secret || c?.criminal;
-          }).length;
-          const gain = n * (value || 0);
+          const n = criminal + secret;
+          const gain = n * value;
           if (gain > 0) {
             transferRes(tgt, o, 'money', gain);
             log(state, o.id, `其中 ${n} 张秘密/罪恶卡，${nameOf(tgt)} 支付 ${gain} ${RES_LABEL.money}`);
@@ -836,10 +865,127 @@ function execAction(
             log(state, o.id, `其中 ${n} 张可在该地点打出，${nameOf(tgt)} 支付 ${gain} ${RES_LABEL.money}`);
           }
         } else if (tags.includes('Discard')) {
-          const n = firstNumber(slots, 1) || 1;
+          // ⚠️ 原实现写死 `firstNumber(slots,1) || 1` → 永远只弃 1 张。
+          // 但 a046「清剿行动」的文案是 "You can discard **any cards** from
+          // their hand, you get {1}^ for each card discarded" —— 参数是 `0`，
+          // 表示"任意数量"，应当**弃光**。（`0` 与 `1` 在这张卡上不是同一回事。）
+          const raw = firstNumber(slots, 0);
+          const n = raw > 0 ? raw : tgt.hand.length;
           const dropped = discardFromHand(state, tgt, n);
           addRes(o, 'malice', dropped.length);
           log(state, o.id, `丢弃其 ${dropped.length} 张手牌，+${dropped.length} ${RES_LABEL.malice}`);
+        }
+
+        // ── a128「开诚骗术」/a177「满堂红」/a148「违禁走私」──
+        // "揭开**你的**手牌"：给**出牌者自己**发奖，不是给目标。
+        if (tags.includes('Confess')) {
+          const myCrim = ownFlags.criminal;
+          const mySec = ownFlags.secret;
+          // 文案：每张罪恶卡 +{2}&、每张秘密卡 +{1}&（a128：params[0]=1, params[1]=2）
+          const perCrim = value2 || value;
+          const perSec = value;
+          const gain = myCrim * perCrim + mySec * perSec;
+          if (gain) {
+            addRes(o, 'vote', gain);
+            log(state, o.id,
+              `揭开手牌：${myCrim} 张罪恶卡 ×${perCrim} + ${mySec} 张秘密卡 ×${perSec} → +${gain} ${RES_LABEL.vote}`);
+          }
+        }
+
+        if (tags.includes('Contraband')) {
+          // a148「违禁走私」：揭开**你的**手牌，每张罪恶卡 +2 齿轮、每张秘密卡 +50 金钱
+          // （`card.params = [1,1]` 是占位，实际数值写在卡面 `+2*` / `+50$`）
+          const s = ownFlags.criminal * 2;
+          const m = ownFlags.secret * 50;
+          if (s) addRes(o, 'score', s);
+          if (m) addRes(o, 'money', m);
+          if (s || m) {
+            log(state, o.id,
+              `走私清点：${ownFlags.criminal} 张罪恶卡 → +${s} ${RES_LABEL.score}，`
+              + `${ownFlags.secret} 张秘密卡 → +${m} ${RES_LABEL.money}`);
+          }
+        }
+
+        // ── a177「满堂红」：揭开**你的**手牌。每有一对同移动点数的牌 +{1}$；
+        //    每个点数上多出的每张再 +{3}$ ──
+        if (tags.includes('SamePointsBonus')) {
+          const perPair = value;              // params[0] = 100
+          const perExtra = nums[2] ?? value;  // params[2] = 100
+          const byMove = new Map<number, number>();
+          for (const id of o.hand) {
+            const mv = CARD_BY_ID[id]?.move ?? 0;
+            byMove.set(mv, (byMove.get(mv) ?? 0) + 1);
+          }
+          let pairs = 0;
+          let extras = 0;
+          for (const cnt of byMove.values()) {
+            if (cnt < 2) continue;
+            pairs += 1;              // 这个点数上凑成了一对
+            extras += cnt - 2;       // 多出来的每张再算一次
+          }
+          const gain = pairs * perPair + extras * perExtra;
+          if (gain) {
+            addRes(o, 'money', gain);
+            log(state, o.id,
+              `满堂红：${pairs} 对 + ${extras} 张多余 → +${gain} ${RES_LABEL.money}`);
+          }
+        }
+
+        // ── a151「告密者」：若发现罪恶卡，出牌者刑期结束 ──
+        if (tags.includes('Snitch')) {
+          if (criminal > 0 && o.term > 0) {
+            log(state, o.id, `发现 ${criminal} 张罪恶卡，告密成功，刑期结束`);
+            o.term = 0;
+            o.inJail = false;
+          } else if (criminal > 0) {
+            log(state, o.id, `发现 ${criminal} 张罪恶卡，但本人未在服刑`);
+          }
+        }
+
+        // ── a177 的 `ZeroVotes`：本次揭手牌不会引来逮捕（揭露罪恶卡本应被捕）──
+        if (tags.includes('ZeroVotes')) {
+          o.flags['showHandNoArrest'] = 1;
+        }
+
+        // ── a063「诚信交易」/ m023「大公无私」：交换手牌 ──
+        if (tags.includes('Exchange')) {
+          const invert = tags.includes('Invert');
+          // `Pay`：a063 文案 "they give you {1}$ and swap their hand with you"
+          // → **对手付给出牌者**（方向原先写反了）
+          if (tags.includes('Pay') && value > 0) {
+            transferRes(tgt, o, 'money', value);
+            log(state, o.id, `${nameOf(tgt)} 支付 ${value} ${RES_LABEL.money} 给 ${nameOf(o)}`);
+          }
+          if (invert) {
+            // m023「大公无私」：**我先给对手看**，对手用自己的牌与我交换
+            const mine = [...o.hand];
+            o.hand = [...tgt.hand];
+            tgt.hand = mine;
+            log(state, o.id, `与 ${nameOf(tgt)} 交换了手牌（对手主导）`);
+          } else {
+            const theirs = [...tgt.hand];
+            tgt.hand = [...o.hand];
+            o.hand = theirs;
+            log(state, o.id, `与 ${nameOf(tgt)} 交换了手牌`);
+          }
+        }
+
+        // ── a176「公开性」：对手要么全揭开，要么每留一张 +{1}^、给你 {2}& ──
+        if (tags.includes('SelectCards')) {
+          // 对手全揭开：什么都不发生（已经"揭开"了）；
+          // 选择不揭开：每保留一张 +value ^ 并给 value2 &
+          const refused = tgt.hand.length;
+          if (refused > 0) {
+            addRes(tgt, 'malice', value);
+            if (!value2) {
+              log(state, tgt.id, `${nameOf(tgt)} 保留 ${refused} 张不揭开，+${value} ${RES_LABEL.malice}`);
+            } else {
+              transferRes(tgt, o, 'vote', value2);
+              log(state, tgt.id,
+                `${nameOf(tgt)} 保留 ${refused} 张不揭开，+${value} ${RES_LABEL.malice}`
+                + `、给 ${nameOf(o)} ${value2} ${RES_LABEL.vote}`);
+            }
+          }
         }
       }
       return undefined;

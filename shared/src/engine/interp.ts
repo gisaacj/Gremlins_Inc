@@ -13,7 +13,7 @@ import type {
   ActionType, EnginePlayer, EngineState, PendingChoice, ResourceKey, CardAction,
 } from './model.js';
 import {
-  CARD_BY_ID, CHARACTER_BY_ID, MISFORTUNE_CARDS, cellLabel, characterName, getCell, getMap,
+  CARD_BY_ID, CHARACTER_BY_ID, JAIL_CARDS, MISFORTUNE_CARDS, cellLabel, characterName, getCell, getMap,
 } from './model.js';
 import { STRINGS } from '../gamedata/strings.js';
 import { extraBribeFrom, fireTrigger as firePermTrigger } from './permanents.js';
@@ -1013,11 +1013,38 @@ function execAction(
       return undefined;
     }
     case 'PayTerm': {
+      // t016「缓刑」：`PayTerm("30")`，卡牌 params = [30, 1]
+      //   文案（中英一致）："为剩余监狱刑期的**每次走牌机会**支付{1}$赎金：
+      //   获得释放并额外获得{2}次走牌（**如果无法付清，则维持原样**）"
+      //   EN: "Pay {1}$ for every turn that remains in your jail term:
+      //        you are free! +{2} extra turn (you must have the required amount)."
+      //
+      // ⚠️ 原实现把 30 当成"刑期回合数"直接减刑期，**既不花钱、也不检查
+      // 够不够、也不放人** —— 实测 term 3、$0 也能白嫖出狱条件。
+      // 正确语义：单价 × 剩余刑期 = 总价；付得起才放人并给额外走牌。
       const o = owner(state, ctx);
-      const n = firstNumber(slots, 1);
-      const paid = Math.min(o.term, n);
-      o.term -= paid;
-      log(state, o.id, `支付刑期 -${paid}`);
+      const perTurn = firstNumber(slots, 0);
+      // t016 的"额外走牌"次数在**卡牌自己**的 params[1]（=1）。
+      // ⚠️ `cardParamsOf` 只查行动卡与厄运卡，监狱卡查不到 —— 这里补上。
+      const srcId = ctx.sourceCardId;
+      const srcParams = srcId
+        ? (CARD_BY_ID[srcId] ?? MISFORTUNE_CARDS.find((c) => c.id === srcId)
+          ?? JAIL_CARDS.find((c) => c.id === srcId))?.params
+        : undefined;
+      const extraTurns = Number(srcParams?.[1] ?? 0) || 0;
+      const due = perTurn * Math.max(0, o.term);
+      if (due <= 0) return undefined;
+      if (o.res.money < due) {
+        log(state, o.id, `缓刑：需 ${due} 金钱（${perTurn}×${o.term}），付不起，维持原样`);
+        return undefined;
+      }
+      addRes(o, 'money', -due);
+      o.term = 0;
+      o.inJail = false;
+      if (extraTurns > 0) o.extraTurns = (o.extraTurns ?? 0) + extraTurns;
+      log(state, o.id,
+        `缓刑：支付 ${due} 金钱赎回剩余刑期，获释`
+        + (extraTurns > 0 ? `，并额外获得 ${extraTurns} 次走牌` : ''));
       return undefined;
     }
     case 'ChangeGovernship': {

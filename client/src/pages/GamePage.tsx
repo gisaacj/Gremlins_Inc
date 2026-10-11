@@ -86,6 +86,17 @@ export function GamePage() {
     if (!isMobile) setDrawer(null);
   }, [isMobile]);
 
+  // ── 传送目的地：换一张卡/换一个挂起时必须重置 ──
+  //
+  // `teleportDest` 是本地选择状态。若不随提示变化清空，会出现两种错：
+  //  ① 上一张卡选的地点残留到下一张（哪怕新卡的目的地集合完全不同）
+  //  ② "确认传送"按钮在还没选就被点（用的是陈旧值）
+  // 用 prompt 的消息 + 目的地集合作为依赖：只要提示换了就清空重选。
+  const placeKey = prompt?.placeOptions?.join(',') ?? '';
+  useEffect(() => {
+    setTeleportDest(null);
+  }, [placeKey, prompt?.message]);
+
   if (!game) {
     return (
       <div className="game">

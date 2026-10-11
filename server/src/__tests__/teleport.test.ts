@@ -114,6 +114,36 @@ check('界面通过 placeOptions 拿到地点（而不是一串文字按钮）',
   console.log(`      placeOptions=${r.prompt!.placeOptions!.length} 项`);
 });
 
+check('端到端：只能选中合法目的地，确认后真的传送过去', () => {
+  // 复刻界面的真实交互：在地图上点一个地点 → 点「确认传送」。
+  // 界面只把**服务端给的 placeOptions** 当作可点目标，所以这里同样只从
+  // placeOptions 里挑，并顺带验证非法的点不进去。
+  const st = game();
+  const map = getMap(st);
+  const a = getPlayer(st, 'P0')!;
+  a.cellId = map.cells.find((c) => c.cellType === 'Risk')!.id;
+  a.hand = [CARD_BY_NAME['a024']!.id];
+
+  const r = playCard(st, a.id, CARD_BY_NAME['a024']!.id);
+  assert.ok(r.ok, 'a024 应能在赌博站点打出');
+  const pr = buildEnginePrompt(st, a.id)!;
+  assert.ok(pr.placeOptions?.length, '应给出可点选的地点');
+
+  // 非法目的地（收入格）不在可点集合里
+  const illegal = map.cells.find((c) => c.cellType === 'Income')!.id;
+  assert.ok(!pr.placeOptions!.includes(illegal),
+    '收入格不该出现在可点选集合里（用户报的正是"能传到收入"）');
+
+  // 选一个合法目的地并"确认传送"
+  const chosen = pr.placeOptions![2]!;
+  const rr = answerChoice(st, a.id, [chosen]);
+  st.pending = rr.pending;
+  assert.ok(rr.ok, `确认传送应成功：${rr.error ?? "(无错误信息)"}`);
+  assert.equal(a.cellId, chosen, '应真的传送到所选地点');
+  assert.ok(map.cells.some((c) => c.id === a.cellId), '落点应是合法格 id');
+  console.log(`      选中 ${map.cells.find((c) => c.id === chosen)!.cellType} → 落点一致`);
+});
+
 // ─────────────────────────────────────────────────────────────
 console.log('\n=== bug E：位置必须永远是合法格 id ===');
 

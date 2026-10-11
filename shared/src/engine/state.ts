@@ -860,6 +860,20 @@ export function playEffectCard(
   if (!p.flags['skipDraw']) {
     drawTo(state, p, 1);
   }
+
+  // ── 整张牌处理完，把手牌收敛回上限 ──
+  //
+  // ⚠️ a078「古代经文」`actions = [PickCardEarly, SelectDeckCard(6|Hand)]`：
+  //   `PickCardEarly` 先抽 1（手牌 0→1）→ `SelectDeckCard` 抽 6 进手牌、
+  //   并把上限压到 `HAND_SIZE` → 但紧接着"打牌后补抽 1 张"又把它顶到 7。
+  //   卡面写的是"抽 6 张加入手牌，**保留 6**，丢弃其余"，结束时应该是 6 张。
+  // 在整张牌结算完（含补抽）之后再收敛一次，与"手牌恒为 6"的不变量一致。
+  if (!card.permanent && !card.secret) {
+    while (p.hand.length > HAND_SIZE) {
+      const extra = p.hand.pop()!;
+      state.discard.push(extra);
+    }
+  }
   // 清除"可再打一张"标记（用掉了这次额外机会）
   if (p.flags['canPlayAgain']) delete p.flags['canPlayAgain'];
 

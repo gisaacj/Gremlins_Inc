@@ -98,8 +98,14 @@ export interface S2CEvents {
   'game:state': (state: SerializedGameState) => void;
   /** 增量状态更新（每次动作后） */
   'game:patch': (patch: GamePatch) => void;
-  /** 提示：需要玩家做选择（仅发给当前行动者） */
-  'game:prompt': (prompt: PlayerPrompt) => void;
+  /**
+   * 提示：需要玩家做选择（仅发给当前行动者）。
+   *
+   * `null` = 此刻**没有**需要这名玩家做的决策（界面应清掉旧提示）。
+   * 服务端在引擎侧"无事可做"时会自动结算/推进回合再重发，
+   * 所以客户端拿到 null 只需清空提示，不需要自己轮询或猜测。
+   */
+  'game:prompt': (prompt: PlayerPrompt | null) => void;
   /** 日志 */
   'game:log': (entry: { turn: number; playerId: string; text: string; ts: number }) => void;
   /** 游戏结束 */

@@ -18,7 +18,7 @@ import {
 import { discardMoveCard } from './api.js';
 import { isDiceMoveCard } from '../board-view.js';
 import { buildEnginePrompt, serializeEngineState } from './serialize.js';
-import { createState } from './state.js';
+import { createState, finishTurnActions } from './state.js';
 import type { EngineInitArgs } from './state.js';
 import type { PlayerPrompt, SerializedGameState } from '../protocol.js';
 
@@ -77,9 +77,30 @@ export class LocalGame {
   get round(): number { return this.state.round; }
   get pending(): PendingChoice | undefined { return this.state.pending; }
 
-  /** 该玩家当前该做什么 */
+  /**
+   * 该玩家当前该做什么。
+   *
+   * ⚠️ 单机模式**也必须**在"没有提示"时自动收尾，否则界面的出牌/跳过按钮
+   * 不会出现（它只在 `prompt.type` 是 `select_move_card` /
+   * `play_card_or_skip` 时才渲染）→ 手牌全灰、点不了任何东西。
+   *
+   * 用户实测："我移动到警察站点，直接灰色，没任何东西触发，无法下一步了"。
+   * 根因是走牌落地后引擎只登记"欠着的格子效果"（`pendingCellEffect`），
+   * 故意留到 UseCell 阶段收尾 —— 而玩家已经没有别的可做，就没人来收尾了。
+   *
+   * 服务端路径用 `rooms.ts` 的 `settleIfNoPrompt`（算法一致）；
+   * 这里覆盖单机路径。两处都**不能**把这逻辑塞进 `buildEnginePrompt`，
+   * 那个函数必须保持只读（已有多个测试依赖"走牌后、结算前"的中间态）。
+   */
   promptFor(playerId: string): PlayerPrompt | null {
-    return buildEnginePrompt(this.state, playerId);
+    let prompt = buildEnginePrompt(this.state, playerId);
+    if (prompt || this.state.phase !== 'playing') return prompt;
+    // 先结算欠着的格子效果（它可能自己挂起，如警察格问"付贿赂还是掷骰"）
+    finishTurnActions(this.state);
+    // 没有挂起 → 推进回合（内部也会结算，并自动跳过无事可做的下一位）
+    if (!this.state.pending) nextTurn(this.state);
+    prompt = buildEnginePrompt(this.state, playerId);
+    return prompt;
   }
 
   /** 该玩家视角的完整状态 */

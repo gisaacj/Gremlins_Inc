@@ -40,11 +40,15 @@ const ok = (pending?: PendingChoice): ActionResult => ({ ok: true, pending });
  * 触发条件（全部满足）：
  *  - 无挂起决策
  *  - 已移动（movedThisTurn = true）或在狱中
+ *  - 终点格效果已结算（无待结算的 `pendingCellEffect`）
  *  - 无额外走牌可走（extraTurns = 0 或没有可移动牌）
  *  - 无可打效果牌
  *  - 无可选动作（站点/建筑）
+ *
+ * ⚠️ 会被 `rooms.ts` 的 `emitPromptTo` 复用：引擎侧"无事可做"时必须
+ * **主动推进回合**，否则界面会停在一个既没有 prompt、也没有按钮的状态。
  */
-function maybeAutoEnd(state: EngineState): ActionResult {
+export function maybeAutoEnd(state: EngineState): ActionResult {
   if (state.pending) return ok(state.pending);
 
   const pid = currentPlayerId(state);
@@ -52,7 +56,14 @@ function maybeAutoEnd(state: EngineState): ActionResult {
   if (!p) return ok();
   if (!p.movedThisTurn && !p.inJail) return ok();
 
-  // 终点格效果尚未结算 → 不自动结束（等 skipPlay 触发 resolveLanding）
+  // 终点格效果尚未结算 → 不自动结束（等 UseCell 阶段收尾 / 服务端补结算）。
+  //
+  // ⚠️ 这里**故意不**顺手结算 `pendingCellEffect`：
+  // `buildEnginePrompt` 必须是"只读"的（它会被界面反复调用），
+  // 在里面改状态会让"走牌之后、结算之前"这个中间态无法被观察/测试。
+  // 真正需要"没人管就自动收尾"的地方在服务端（`rooms.ts` 的
+  // `emitPromptTo`：提示为 null 时主动结算并推进回合）——
+  // 用户报的卡死正是在那条路径上。
   if (!p.flags['cellResolved']) return ok();
 
   // 有额外走牌且还能移动 → 不自动结束

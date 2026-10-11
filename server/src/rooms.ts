@@ -6,7 +6,7 @@ import type {
 import { DEFAULT_ROOM_CONFIG, CHARACTERS, isDiceMoveCard } from '@gremlins/shared';
 import type { EngineState } from '@gremlins/shared/engine';
 import {
-  answerChoice, buildEnginePrompt, currentPlayerId, hasPending, isTurn,
+  answerChoice, buildEnginePrompt, currentPlayerId, finishTurnActions, hasPending, isTurn,
   jailTurn, moveWithCard, newGame, nextTurn, playCard, playChaosCard, rollMoveDice, runOption,
   serializeEngineState, skipPlay,
 } from '@gremlins/shared/engine';
@@ -505,12 +505,57 @@ function broadcastAllPrompts(io: SServer, room: Room): void {
   for (const pid of room.players.keys()) emitPromptTo(io, room, pid);
 }
 
+/**
+ * 服务端"没有提示"时的收尾：结算欠着的格子效果，必要时推进回合。
+ *
+ * 抽成独立函数是为了能被直接测试 —— 用户报的"移动到警察格直接灰色卡死"
+ * 就发生在这条路径上。
+ *
+ * ⚠️ **不能**把这段逻辑塞进 `buildEnginePrompt`：那个函数必须是只读的
+ * （界面会反复调用），在里面改状态会让"走牌之后、结算之前"这个中间态
+ * 无法被观察（已有多个测试依赖它）。
+ *
+ * @returns 收尾之后的提示（可能仍是 null，例如已交棒给别人）
+ */
+export function settleIfNoPrompt(
+  state: EngineState,
+  viewerId: string,
+): PlayerPrompt | null {
+  let prompt = buildEnginePrompt(state, viewerId);
+  if (prompt || state.phase !== 'playing') return prompt;
+
+  // 1. 结算"欠着的格子效果"；它自己可能挂起
+  //    （警察格问"付贿赂还是掷骰" → 那就把这个挂起下发给玩家）
+  finishTurnActions(state);
+  // 2. 没有挂起 → 推进回合（`nextTurn` 内部也会结算，并自动跳过无事可做的下一位）
+  if (!state.pending) nextTurn(state);
+
+  prompt = buildEnginePrompt(state, viewerId);
+  return prompt;
+}
+
 function emitPromptTo(io: SServer, room: Room, viewerId: string): void {
   if (!room.gameState) return;
   const player = room.players.get(viewerId);
   if (!player || player.isAI) return;
   const prompt = buildEnginePrompt(room.gameState, viewerId);
-  if (prompt) io.to(viewerId).emit('game:prompt', prompt);
+
+  // ── prompt 为 null = "这一步没有需要玩家做的决策" ──
+  //
+  // 这时**必须由服务端收尾**，否则界面会停在一个既没有提示、也没有按钮的
+  // 状态（手牌全灰）。用户实测："我移动到警察站点，直接灰色，没任何东西触发，
+  // 无法下一步了"。
+  if (!prompt && room.gameState.phase === 'playing') {
+    settleIfNoPrompt(room.gameState, viewerId);
+    // 结算/推进改变了所有人看到的东西 → 全部重发
+    broadcastAllPrompts(io, room);
+    broadcastGameState(io, room);
+    return;
+  }
+
+  // `null` 也要发：让客户端清掉旧提示，而不是停在移动前的陈旧界面上
+  // （原先 `if (prompt)` 才 emit，客户端因此永远收不到"清空"信号）。
+  io.to(viewerId).emit('game:prompt', prompt);
 }
 
 function broadcastGameState(io: SServer, room: Room): void {

@@ -18,6 +18,10 @@ import {
   ELECTION_INTERVAL, arrest, buildMisfortuneDeck, discardFromHand, drawMisfortune, drawTo,
   random, release, rollDice, runActions, runElection, type ActionContext,
 } from './interp.js';
+// `bribeAmount` 已移到 `interp.ts`（避免 interp↔state 的循环依赖），
+// 这里 import 进来给本文件用，并**继续对外导出**，调用方无感。
+import { bribeAmount } from './interp.js';
+export { bribeAmount };
 import { addRes, transferRes } from './resources.js';
 import { displayCardName, displayCardRules } from '../display-text.js';
 import {
@@ -1868,19 +1872,7 @@ function policeBribe(state: EngineState, p: EnginePlayer): number {
 }
 
 /** 贿赂金额：原版为 20 + 罪恶值，叠加永久卡加成与角色能力修正 */
-export function bribeAmount(state: EngineState, p: EnginePlayer): number {
-  const mod = bribeModifier(p);
-  // 「乞丐·一帆风顺」把基数从 20 换成 5；否则用默认基数
-  const baseOverride = typeof p.flags['bribeBase'] === 'number' ? p.flags['bribeBase'] : undefined;
-  const base = baseOverride ?? mod.base;
-  // 默认每 1 点罪恶 +1；「法官·正义之士」削弱为每 2 点 +1
-  let amount = base + Math.floor(p.res.malice * mod.perMalice);
-  // 「自动官僚」等永久卡：其他玩家的贿赂 +N
-  amount += extraBribeFrom(state, p.id);
-  // 政治家「呼吸税」：**政治家当镇长时，全场贿赂 +5**（与算谁的贿赂无关）
-  amount += breathingTaxFrom(state);
-  return Math.max(0, amount);
-}
+
 
 // ---------------------------------------------------------------- 服刑回合
 /**

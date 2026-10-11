@@ -15,8 +15,9 @@ import type {
 import {
   CARD_BY_ID, CHARACTER_BY_ID, MISFORTUNE_CARDS, cellLabel, characterName, getCell, getMap,
 } from './model.js';
-import { fireTrigger as firePermTrigger } from './permanents.js';
-import { fireAbility } from './abilities.js';
+import { STRINGS } from '../gamedata/strings.js';
+import { extraBribeFrom, fireTrigger as firePermTrigger } from './permanents.js';
+import { bribeModifier, breathingTaxFrom, fireAbility } from './abilities.js';
 import { collectButtons } from './dialog.js';
 import { diceTableOf, handleSpecialOutcome, jailTermFor } from './options.js';
 import {
@@ -584,9 +585,12 @@ function execAction(
       return undefined;
     }
     case 'EvilPlayers': {
-      const max = Math.max(...state.players.map((p) => p.res.malice));
-      const evil = state.players.filter((p) => p.res.malice === max);
-      ctx.targets = (evil.length ? evil : [owner(state, ctx)]).map((p) => p.id);
+      // ⚠️ 原实现取"全场罪恶最大值"并只选那些玩家，而卡面说的是
+      // "罪恶**高于你**的玩家"（a069「笑脸戒指」等）。
+      // 实测：主人 ^1、P1 ^5、P2 ^3 时只让 P1 付钱，应该是 P1+P2 都付。
+      const mine = owner(state, ctx).res.malice;
+      const richer = state.players.filter((p) => p.res.malice > mine);
+      ctx.targets = (richer.length ? richer : [owner(state, ctx)]).map((p) => p.id);
       return undefined;
     }
 
@@ -889,7 +893,42 @@ function execAction(
       // 在效果结算中不执行任何弃牌。
       if (hasTag(slots, 'Move')) return undefined;
       const o = owner(state, ctx);
-      const n = firstNumber(slots, o.hand.length) || o.hand.length;
+      const chosen = takeChoice(ctx, type);
+
+      // ── `Pay`：弃**任意张**，每张 +{1}$ ──
+      //
+      // ⚠️ 原实现把 `["<id>","0","Pay"]` 里的 `Pay` 当普通 tag、
+      // `0` 当张数，`0 || hand.length` 又变成"全部"，且**完全没算钱**。
+      // 结果 a073「大扫除！」（"丢弃任意张，每丢弃一张 +{1}$"）
+      // 变成"把手牌全弃、一分钱不给"。
+      //
+      // 张数由玩家决定 → 挂起让他选。
+      if (hasTag(slots, 'Pay')) {
+        if (!chosen) {
+          if (!o.hand.length) { log(state, o.id, '大扫除：没有手牌可弃'); return undefined; }
+          return makePending(ctx, type, '选择要丢弃的卡牌（每张有收益）',
+            o.hand.map((id) => ({ value: id, label: CARD_BY_ID[id]?.text.name ?? id })));
+        }
+        // 每次应答弃一张，然后重新挂起，直到玩家不再想弃
+        const pickIdx = o.hand.indexOf(chosen[0]!);
+        if (pickIdx < 0) return undefined;
+        const [dropped] = o.hand.splice(pickIdx, 1);
+        state.discard.push(dropped!);
+        const per = firstNumber(parseParams(cardParamsOf(ctx) ?? []), 0);
+        if (per > 0) addRes(o, 'money', per);
+        log(state, o.id, `大扫除：丢弃「${CARD_BY_ID[dropped!]?.text.name ?? dropped}」`
+          + (per > 0 ? `，+${per} 金钱` : ''));
+        if (!o.hand.length) return undefined;
+        // 还有牌 → 继续问（选项里加一个"结束"）
+        return makePending(ctx, type, `继续丢弃？（已+${per}金钱/张）`,
+          [...o.hand.map((id) => ({ value: id, label: CARD_BY_ID[id]?.text.name ?? id })),
+            { value: '__stop__', label: '不再丢弃' }]);
+      }
+
+      // ── `All` 或缺省：弃光手牌 ──
+      // 张数：显式数值优先，`0`/缺省视为"全部"
+      const raw = firstNumber(slots, 0);
+      const n = raw > 0 ? raw : o.hand.length;
       const dropped = n >= o.hand.length
         ? (() => { const d = o.hand.splice(0); state.discard.push(...d); return d; })()
         : discardFromHand(state, o, n);
@@ -917,13 +956,28 @@ function execAction(
       return undefined;
     }
     case 'ChangeGovernship': {
+      // ⚠️ 原实现无视参数、**切换**镇长身份 —— 于是 m013「税务稽核」
+      // 的 `ChangeGovernship("0")`（"如果你是镇长：你不再是镇长"）
+      // 把**受害者**变成了镇长，完全反了。
+      //
+      // 参数语义（对四张卡的文案逐一核对）：
+      //   "1" → 成为镇长            a106「篡位者」/a162「政变」
+      //   "2" → 成为镇长（限时一小时） a133「一小时镇长」
+      //   "0" → **不再**担任镇长      m013「税务稽核」
       const o = owner(state, ctx);
-      if (state.mayorId === o.id) {
-        state.mayorId = undefined;
-        log(state, o.id, `${nameOf(o)} 不再担任镇长`);
+      const mode = firstNumber(slots, 1);
+      if (mode === 0) {
+        if (state.mayorId === o.id) {
+          state.mayorId = undefined;
+          log(state, o.id, `${nameOf(o)} 不再担任镇长`);
+        } else {
+          log(state, o.id, `${nameOf(o)} 本就不是镇长，无变化`);
+        }
       } else {
         state.mayorId = o.id;
-        log(state, o.id, `${nameOf(o)} 成为镇长`);
+        log(state, o.id, mode === 2
+          ? `${nameOf(o)} 成为镇长（限时一小时）`
+          : `${nameOf(o)} 成为镇长`);
       }
       return undefined;
     }
@@ -999,9 +1053,42 @@ function execAction(
     // 曾经把 CasinoBonus / RiskVotes / MoneyRoll 等也归进来，结果它们
     // 只掷骰、完全不结算。现在 coverage 测试专门拦这种归并。
     case 'ROLL': {
+      // 掷骰 + **按阈值二选一**。
+      //
+      // ⚠️ 原实现只掷骰、把参数全丢掉 —— a032「煽动叛乱」/a144「监守自盗」
+      // 的"若掷出 {1} 或更小：你被逮捕"完全没生效（用户没提到，但是真 bug）。
+      //
+      // 参数形态（对语言包解出的文本核对过）：
+      //   ["3", <则文本UIN>, <否则文本UIN>, <ActionTag>]
+      // 其中 `<则/否则 文本UIN>` 是**给玩家看的结果描述**，本身不是效果；
+      // 真正的效果由后面的动作（如 `Arrest`）执行。
+      //
+      // 例：
+      //   a032 `ROLL(3|你被逮捕了！|-|Arrest)`  → 掷 ≤3 触发（后续 Arrest 逮捕）
+      //   t005 `ROLL(3|+1^、监狱刑期+1|瞬移到垃圾场|Jailbreak)`
+      //        → 掷 ≤3 走失败标签（刑期+1），掷 ≥4 走成功标签（越狱）
+      // 实测阈值 UIN：B97E6D9E7A030DA5="你被逮捕了！"、F97E6DAC36DA0DA9="-"
       const o = owner(state, ctx);
-      state.lastRoll = rollDice(state);
-      log(state, o.id, `${ctx.source}：掷骰 ${state.lastRoll}`);
+      const threshold = firstNumber(slots, 0);
+      const dice = rollDice(state);
+      state.lastRoll = dice;
+      const passed = dice <= threshold;          // "掷出 ≤ 阈值" = 触发第一个文本
+      const labelUin = slots.filter((s) => s.kind === 'id')[passed ? 0 : 1]?.value;
+      const label = labelUin ? uinTextZh(labelUin) : '';
+      const outcome = passed ? '达成' : '未达成';
+      log(state, o.id,
+        `${ctx.source}：掷骰 ${dice}（阈值 ≤${threshold}）→ ${outcome}`
+        + (label && label !== '-' ? `：${label}` : ''));
+      // 把结果放进 scratch，供后续动作/文本使用
+      ctx.scratch = { ...ctx.scratch, roll: String(dice), rollPassed: passed ? '1' : '0' };
+
+      // ── 达成时的后果：参数末位的 tag 决定 ──
+      //
+      // a032/a144 的 tag 是 `Arrest` → "掷出 ≤3：你被逮捕"。
+      // （`Arrest` 不是独立的动作类型，只是这个 tag；实测确认过。）
+      if (passed && hasTag(slots, 'Arrest')) {
+        arrest(state, o, `${ctx.source}：掷出 ${dice}（≤${threshold}）`);
+      }
       return undefined;
     }
 
@@ -1522,6 +1609,44 @@ export function teleportTargetCells(state: EngineState, params: string[]): { id:
   return out;
 }
 
+/**
+ * 按 UIN 取中文文本（用于 ROLL 这类"结果描述 UIN"参数）。
+ *
+ * 参数可能是**十六进制**（dnSpy 形态）或十进制（`AsString` 形态），两种都试。
+ * 取不到返回空串。
+ */
+function uinTextZh(raw: string): string {
+  let dec = raw;
+  if (!/^\d+$/.test(raw)) {
+    try { dec = BigInt('0x' + raw).toString(); } catch { dec = raw; }
+  }
+  return STRINGS[raw]?.zh ?? STRINGS[dec]?.zh ?? STRINGS[raw]?.en ?? STRINGS[dec]?.en ?? '';
+}
+
+/**
+ * 某玩家当前的贿赂额（`~`）。
+ *
+ * ⚠️ 这个函数原先在 `state.ts`。但 `interp.ts` 的 `handleResourceLoss`
+ * 需要它（`OpponentLoseMoney("Bribe",N)` = "付 ~xN"），而
+ * `interp.ts → state.ts → interp.ts` 会形成**循环依赖**（`state.ts` 已经
+ * import 了 interp 的 `random`/`rollDice` 等）。
+ * 所以把它移到这里：`state.ts` 反过来从这里 import，方向单一，不再成环。
+ * `state.ts` 仍对外 re-export，调用方（测试等）无感。
+ */
+export function bribeAmount(state: EngineState, p: EnginePlayer): number {
+  const mod = bribeModifier(p);
+  // 「乞丐·一帆风顺」把基数换成 5；否则用默认基数
+  const baseOverride = typeof p.flags['bribeBase'] === 'number' ? p.flags['bribeBase'] : undefined;
+  const base = baseOverride ?? mod.base;
+  // 默认每 1 点罪恶 +1；「法官·正义之士」削弱为每 2 点 +1
+  let amount = base + Math.floor(p.res.malice * mod.perMalice);
+  // 「自动官僚」等永久卡：其他玩家的贿赂 +N
+  amount += extraBribeFrom(state, p.id);
+  // 政治家「呼吸税」：政治家当镇长时，全场贿赂 +5
+  amount += breathingTaxFrom(state);
+  return Math.max(0, amount);
+}
+
 /** 所有建筑格 id */
 export function buildingCellIds(state: EngineState): string[] {
   return getMap(state).cells.filter((c) => {
@@ -1568,6 +1693,27 @@ function handleResourceLoss(
   let receivedTotal = 0;
 
   for (const tgt of targetPlayers(state, ctx)) {
+    // ── `Bribe`（`~`）：金额 = 该目标当前的贿赂额 × N ──
+    //
+    // ⚠️ 原实现把 `Bribe` 当成普通 tag，`firstNumber` 只取到后面那个 N，
+    // 于是"支付 ~x2"被算成"支付 2 金钱"（实测 200→198，与文案完全不符）。
+    // `~` 不是存储型资源，它按罪恶算出来（见 state.ts 的 bribeAmount），必须现算。
+    // 文案同时写"镇长无需支付"（m011 讹诈 / m013 税务稽核）。
+    if (hasTag(slots, 'Bribe')) {
+      const mult = firstNumber(slots, 1) || 1;
+      if (state.mayorId === tgt.id) {
+        log(state, tgt.id, `${nameOf(tgt)} 是镇长，无需支付贿赂`);
+        continue;
+      }
+      const due = bribeAmount(state, tgt) * mult;
+      const rb = payAmount(tgt, o, [{ kind: 'number', value: due }], { defaultKey: 'money' });
+      receivedTotal += rb.paid;
+      log(state, tgt.id,
+        `${nameOf(tgt)} 贿赂×${mult} → 支付 ${rb.paid} 金钱给 ${nameOf(o)}`);
+      if (!rb.full && hasTag(slots, 'Arrest')) arrest(state, tgt, `${ctx.source}：无力足额支付`);
+      continue;
+    }
+
     // ── `HaltFailed` 门控：付不出就**整段不生效** ──
     //
     // a179「昂贵的命令」：「该玩家必须支付 {1}$ 才能获得 {2}* 并失去 {3}^。

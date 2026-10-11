@@ -658,8 +658,25 @@ export function playEffectCard(
     applyCardResourceBundle(state, p, card, 'outcome', card.outcome, -1);
   }
 
+  // ── 用卡牌**行动**时，只跑 `MOVE` 之前的动作 ──
+  //
+  // ⚠️ 卡牌的 `actions` 数组把两段拼在一起：
+  //     [ ...打出效果..., MOVE, ...仅在"用于移动"时才生效的效果... ]
+  // 移动路径用的是 `card.moveActions`（生成数据时已把 `MOVE` 之后的部分抽出来），
+  // 而行动路径原先直接传**整个** `card.actions` —— 于是 `[m]` 段被一起执行。
+  //
+  // 实测后果（16 张卡受影响）：
+  //   a015「永动机」`[m] -{1}$ if you use this card to move` → 用卡牌行动也扣 20$
+  //   a150「斜坡」 `[m] +{2}$ …`                            → 白拿 50$
+  // 用户没提到，但是**成规模的错误**。
+  //
+  // 注意：`MOVE` **之前**的动作两段**都要跑**（例如 a024 的 Teleport 是
+  // "打出即传送"，与移动无关），所以只能截掉 `MOVE` 之后的部分。
+  const moveIdx = card.actions.findIndex((a) => String(a.type) === 'MOVE');
+  const actionsForPlay = moveIdx >= 0 ? card.actions.slice(0, moveIdx) : card.actions;
+
   const ctx: ActionContext = {
-    actions: card.actions,
+    actions: actionsForPlay,
     index: 0,
     targets: [p.id],
     ownerId: p.id,

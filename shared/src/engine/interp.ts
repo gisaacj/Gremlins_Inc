@@ -560,7 +560,10 @@ function execAction(
     case 'SelectPermanent':
     case 'SelectBonus':
     case 'SelectPunishment':
-    case 'SelectZek':
+    // ⚠️ `SelectZek` **不在**这个列表里：它不产生挂起、直接结算
+    // （t009「保护费」/ t010「新狱友」），必须落到下面 `execAction` 的分支。
+    // 放进来会先命中 `handleSelect`，而 `handleSelect` 没有它的分支 →
+    // 落 `default` 变成"什么都不做"。
     case 'SelectDeckCard':
     case 'NameLocation':
     case 'Teleport': {
@@ -1063,7 +1066,6 @@ function execAction(
     }
 
     case 'MOVE':
-    case 'SpecialMove':
       // 由回合流程驱动，动作序列中仅作标记
       return undefined;
 
@@ -1282,11 +1284,6 @@ function execAction(
       return undefined;
     }
 
-    case 'Exchange_Perm': {
-      log(state, ctx.ownerId, '永久卡交换');
-      return undefined;
-    }
-
     // ============ 骰子类 ============
     // 注意：这里**只能**放真正的"只掷骰"原语。
     // 曾经把 CasinoBonus / RiskVotes / MoneyRoll 等也归进来，结果它们
@@ -1476,6 +1473,93 @@ function execAction(
     case 'Perm_Trader':
     case 'Perm_TreasureMoney':
       return undefined;
+
+    case 'SelectZek': {
+      // 监狱卡：**等级比你低**的每位囚犯给你 {1}（t009「保护费」/ t010「新狱友」）。
+      //
+      // ⚠️ 原实现没有这个分支 → 这两张监狱卡的效果完全没生效。
+      // 参数：`["<id1>", "<id2>", "Money"|"Vote", 数值]`
+      const o = owner(state, ctx);
+      const tag = slots.find((s) => s.kind === 'tag')?.value ?? 'Money';
+      const key: ResourceKey = /vote/i.test(tag) ? 'vote' : 'money';
+      const per = firstNumber(slots, 0);
+      if (!per) return undefined;
+      // 我的监狱等级：用刑期长短近似原版 Rank（刑期越长等级越高）
+      const myRank = o.term;
+      let total = 0;
+      let n = 0;
+      for (const other of state.players) {
+        if (other.id === o.id) continue;
+        if (!other.inJail) continue;
+        if (other.term < myRank) { total += per; n++; }
+      }
+      if (total > 0) {
+        addRes(o, key, total);
+        log(state, o.id,
+          `保护费：${n} 名等级更低的囚犯各给 ${per} → +${total} ${RES_LABEL[key]}`);
+      } else {
+        log(state, o.id, '保护费：没有等级更低的囚犯，无收益');
+      }
+      return undefined;
+    }
+
+    case 'Exchange_Perm': {
+      // a152「伪装卡牌」："Choose any player: they swap with you **this card**
+      // for one of their active permanent cards (their choice)."
+      //
+      // 也就是：**这张牌本身**（a152）成为对方的永久卡，而对方从自己的
+      // 永久卡里挑一张给我。`Exchange_Perm()` 无参数 —— 交换的是"当前这张卡"。
+      //
+      // ⚠️ 原实现只写了一句日志，什么都没做。
+      const o = owner(state, ctx);
+      const sourceId = ctx.sourceCardId;
+      for (const tgt of targetPlayers(state, ctx)) {
+        if (!tgt.permanents.length) {
+          log(state, o.id, `${nameOf(tgt)} 没有永久卡，交换取消`);
+          continue;
+        }
+        // 对方"选择"：AI/玩家未提供时取第一张（原版由对方决定）
+        const pickId = ctx.scratch?.[`exchangePick:${tgt.id}`] ?? tgt.permanents[0]!;
+        const idx = tgt.permanents.indexOf(pickId);
+        if (idx < 0) continue;
+        tgt.permanents.splice(idx, 1);
+        o.permanents.push(pickId);
+        if (sourceId && CARD_BY_ID[sourceId]) tgt.permanents.push(sourceId);
+        log(state, o.id,
+          `与 ${nameOf(tgt)} 交换永久卡：得到「${CARD_BY_ID[pickId]?.text.name ?? pickId}」`
+          + `，给出「${sourceId ? CARD_BY_ID[sourceId]?.text.name ?? sourceId : '这张卡'}」`);
+      }
+      return undefined;
+    }
+
+    case 'SpecialMove': {
+      // a066「巧夺先机」的 `[m]` 段：
+      //   "When you use this card to move, you can **pay {1}$** to change
+      //    move points to 4."
+      //
+      // ⚠️ 原实现没有这个分支 → 这张牌的移动段没生效（支付与改步数都没有）。
+      // 参数是**要付的金额**（a066 `SpecialMove(20)`）。
+      const o = owner(state, ctx);
+      const cost = firstNumber(slots, 0);
+      // `startMove` 已经把这个代价**预先扣过**（付不起就根本不让移动）。
+      // 这里不能再扣一次，否则 a066 会 -40（实测过）。
+      const prepaid = o.flags['moveCostPaid'] != null;
+      if (prepaid) delete o.flags['moveCostPaid'];
+      if (cost > 0 && !prepaid) {
+        if (o.res.money < cost) {
+          log(state, o.id, `巧夺先机：付不起 ${cost} 金钱，移动点数不变`);
+          return undefined;
+        }
+        addRes(o, 'money', -cost);
+        log(state, o.id, `巧夺先机：支付 ${cost} 金钱`);
+      } else if (prepaid) {
+        log(state, o.id, `巧夺先机：移动代价 ${cost} 已在移动前支付`);
+      }
+      // 把移动点数改成 4（由 `startMove` 读取 `customMoveSteps`）
+      o.flags['customMoveSteps'] = 4;
+      log(state, o.id, '巧夺先机：移动点数改为 4');
+      return undefined;
+    }
 
     // ============ 其余原语：显式记录，便于对齐进度 ============
     default: {
@@ -1825,6 +1909,66 @@ function handleSelect(
         pool.map((id) => ({ value: id, label: CARD_BY_ID[id]?.text.name ?? id })));
     }
 
+    case 'SelectPunishment': {
+      // 出牌者替**对手**挑一种损失（a105「恶魔之职」/ a180「天职」）。
+      //
+      // ⚠️ 原实现虽然在 `execAction` 的 case 列表里（会走 `handleSelect`），
+      // 但 `handleSelect` 里**没有对应分支** → 落 `default` 直接返回，什么都不做。
+      //
+      // 参数形态（对两张卡的文案逐一核对）：
+      //   `["<id>", money, score, votes, ("pay")?]`
+      //     a105 `(id|400|3|12)`      → 对手 -400$ / -12& / -4*（`card.params=[400,4,12]`）
+      //     a180 `(id|200|3|6|pay)`   → 对手**给你** 200$ / 3* / 6&（多了 `pay`，方向相反）
+      //
+      // 注意 a105 的**动作参数与卡牌参数顺序不一致**：
+      //   动作 `400|3|12`，卡牌 `[400,4,12]`；
+      //   卡面是 `-{1}$或-{3}&或-{2}*` → $ 取 {1}、& 取 {3}、* 取 {2}。
+      //   也就是"选票用卡牌 params[2]、齿轮用卡牌 params[1]"。按卡面来。
+      const o = owner(state, ctx);
+      const nums = parseParams(cardParamsOf(ctx) ?? [])
+        .filter((s) => s.kind === 'number').map((s) => s.value);
+      const money = nums[0] ?? 0;
+      const score = nums[1] ?? 0;
+      const votes = nums[2] ?? 0;
+      const pay = hasTag(slots, 'pay');
+
+      const choice = takeChoice(ctx, kind);
+      if (choice) {
+        const pick = choice[0];
+        const targets = targetPlayers(state, ctx);
+        for (const tgt of targets) {
+          if (pay) {
+            // 对手付给出牌者
+            const key: ResourceKey = pick === 'money' ? 'money' : pick === 'vote' ? 'vote' : 'score';
+            const amt = pick === 'money' ? money : pick === 'vote' ? votes : score;
+            if (amt > 0) {
+              transferRes(tgt, o, key, amt);
+              log(state, o.id, `${nameOf(tgt)} 给出 ${amt} ${RES_LABEL[key]}`);
+            }
+          } else {
+            // 对手单纯失去
+            const key: ResourceKey = pick === 'money' ? 'money' : pick === 'vote' ? 'vote' : 'score';
+            const amt = pick === 'money' ? money : pick === 'vote' ? votes : score;
+            if (amt > 0) {
+              const lost = -addRes(tgt, key, -amt);
+              log(state, tgt.id, `${nameOf(tgt)} 失去 ${lost} ${RES_LABEL[key]}`);
+            }
+          }
+        }
+        return undefined;
+      }
+      if (!money && !score && !votes) return undefined;
+      const rel = (n: number, r: ResourceKey) => pay
+        ? `该玩家给你 ${n} ${RES_LABEL[r]}`
+        : `该玩家 -${n} ${RES_LABEL[r]}`;
+      return makePending(ctx, kind, pay ? '选择要对手交出什么' : '选择要对手失去什么', [
+        { value: 'money', label: rel(money, 'money') },
+        { value: 'vote', label: rel(votes, 'vote') },
+        { value: 'score', label: rel(score, 'score') },
+      ]);
+    }
+
+
     case 'SelectBonus': {
       // 自己从三个奖励里挑一个（a081「神灯精灵」/ a108「勾结恶魔」/ a167「奖励资金」）。
       //
@@ -2087,6 +2231,20 @@ function handleResourceLoss(
   slots: ParamSlot[],
 ): RunResult | undefined {
   const o = owner(state, ctx);
+
+  // ── `[m]` 代价已在 `startMove` 预先扣过，这里不要再扣一次 ──
+  //
+  // `startMove` 现在会用 `moveCostOf` 先校验再扣款（用户要求"付不起就不能移动"），
+  // 而 `moveActions` 里的 `OpponentLoseMoney(20)` 也会走本函数 ——
+  // 两处都扣就变成 -40。用一次性 flag 表示"这张牌的移动代价已经付过了"。
+  if (kind === 'OpponentLoseMoney' && o.flags['moveCostPaid'] != null) {
+    const paid = Number(o.flags['moveCostPaid']) || 0;
+    delete o.flags['moveCostPaid'];
+    if (paid > 0) {
+      log(state, o.id, `${ctx.source}：移动代价 ${paid} 已在移动前支付`);
+      return undefined;
+    }
+  }
 
   // ── 门控 tag：不满足就**整段跳过**（不是改成别的数值）──
   //

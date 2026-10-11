@@ -381,8 +381,18 @@ export function moveCostOf(state: EngineState, p: EnginePlayer, cardId: string):
   const card = CARD_BY_ID[cardId];
   if (!card) return 0;
   let due = 0;
-  for (const a of card.moveActions ?? []) {
+  // `MOVE` 之后的 `[m]` 段；a066 这类没有 `MOVE` 标记的，移动段就是 `SpecialMove`
+  const phase = card.moveActions?.length
+    ? card.moveActions
+    : card.actions.filter((a) => String(a.type) === 'SpecialMove');
+  for (const a of phase) {
     const type = String(a.type);
+    // a066「巧夺先机」：`SpecialMove(20)` = "可以支付 20$ 把移动点数改为 4"
+    if (type === 'SpecialMove') {
+      const n = (a.params ?? []).find((x) => /^\d+$/.test(x));
+      if (n) due += Number(n);
+      continue;
+    }
     if (type !== 'OpponentLoseMoney') continue;
     const params = a.params ?? [];
     // `Bribe`：金额 = 该玩家当前贿赂额 × 倍率
@@ -429,15 +439,24 @@ export function startMove(
     const chk = canMoveWithCard(p, cardId);
     if (!chk.ok) return chk;
 
-    // ── 「付不起就不能用它移动」──
+    // ── 「付不起就不能用它移动」+ 实际扣款 ──
     //
     // 用户明确要求："这个效果你得放在 startMove 之前 —— 因为有些牌如果要
     // 支付金钱才能移动，没钱就不能用它移动了"。
     // 例：a015「永动机」`[m] -20$`、a024「翻筋斗」`[m] -50$`、
-    //     a129「贿赂有道」`[m] Pay ~`。
+    //     a129「贿赂有道」`[m] Pay ~`、a066「巧夺先机」`[m] -20$`。
+    //
+    // ⚠️ 门槛与扣款必须用**同一个** `moveCostOf`：先按它校验，再按它扣。
+    // 否则会出现"校验通过了但没人扣钱"（实测 a066 就是这样：
+    // `SpecialMove` 只改点数、没扣款）。
     const due = moveCostOf(state, p, cardId);
-    if (due > 0 && p.res.money < due) {
-      return { ok: false, reason: `付不起用这张牌移动的代价（需要 ${due}，你有 ${p.res.money}）` };
+    if (due > 0) {
+      if (p.res.money < due) {
+        return { ok: false, reason: `付不起用这张牌移动的代价（需要 ${due}，你有 ${p.res.money}）` };
+      }
+      addRes(p, 'money', -due);
+      p.flags['moveCostPaid'] = due;
+      pushLog(state, p.id, `用「${card.text.name}」移动，支付 ${due} ${RESOURCE_LABEL_ZH.money ?? '金钱'}`);
     }
 
     removeFromHand(state, p, cardId);
@@ -590,9 +609,29 @@ export function startMove(
   // 与"在站点把牌打出"完全不同的时机。
   //
   // 例：a015「永动机」移动时 -20$；a076 移动时跳过 1 回合；a031 可逆行。
-  if (card.moveActions?.length) {
+  //
+  // ── `MOVE` **没有**出现在数据里的特殊移动牌 ──
+  //
+  // a066「巧夺先机」在反编译数据里是：
+  //     SpecialMoveFlag = true
+  //     ActionList = [Teleport, SpecialMove]
+  // **没有 `MOVE` 分隔符** —— 所以"抽出 MOVE 之后的部分"这套生成逻辑
+  // 对它无效，`moveActions` 是空的。
+  //
+  // 卡面把两段写得很清楚：
+  //   text     = "瞬移到任意站点或建筑。"                      ← 打出效果
+  //   moveText = "When you use this card to move, you can pay {1}$
+  //               to change move points to 4."                ← 移动效果
+  // 所以 `SpecialMove` 才是移动段，`Teleport` 是打出效果。
+  //
+  // ⚠️ 我第一版写成"这类卡整张 ActionList 都跑"，结果移动时也要求玩家
+  // 先选传送目的地（`Teleport(All)` 挂起）—— 那是打出效果，不该在移动时问。
+  const movePhase = card.moveActions?.length
+    ? card.moveActions
+    : card.actions.filter((a) => String(a.type) === 'SpecialMove');
+  if (movePhase.length) {
     const r = runActions(state, {
-      actions: card.moveActions,
+      actions: movePhase,
       index: 0,
       targets: [p.id],
       ownerId: p.id,

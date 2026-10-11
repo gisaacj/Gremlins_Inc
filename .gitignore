@@ -20,9 +20,19 @@ npm-debug.log*
 .DS_Store
 
 # Capacitor / mobile
-android/
-ios/
+#
+# 注意：这里**不能**用无锚点的 `android/` —— 它会连带忽略
+# `client/android/`，而那是 Capacitor 的原生工程**源码**
+# （build.gradle / AndroidManifest / 图标资源 …），必须入库，
+# 否则别人 clone 下来没法构建 APK。只忽略仓库根目录下的。
+/android/
+/ios/
 .capacitor/
+
+# 但 Capacitor 原生工程里**生成的东西**要排除（由它自带的
+# client/android/.gitignore 负责 build/、local.properties、
+# app/src/main/assets/public 等）。
+!client/android/
 
 # Env
 .env

@@ -1,0 +1,343 @@
+/* =============================================================
+ * 移动端适配（手机 / 窄屏平板 / 横竖屏切换）
+ *
+ * 背景（用户反馈"手机上打开适配不好、重要信息被遮挡"）：
+ * 原先的窄屏规则只做了两件事 —— 把 .game-main 改成竖向、把侧栏压成
+ * 横向 200px。这带来一串遮挡问题：
+ *
+ *  1. 竖向堆叠后，**侧栏在地图下方又吃掉 200px**，而手牌固定底栏还要
+ *     132px；手机上地图只剩两三行高度，基本没法点。
+ *  2. `.action-panel` 是 `position: fixed; bottom: 140px` —— 一个魔法数字，
+ *     不跟随布局、不避让安全区，直接压在地图上。
+ *  3. 手牌卡片 110×160px，一屏只能看到两三张，且顶到刘海/小白条。
+ *  4. 顶栏元素在窄屏会换行、"镇长：xxx" 挤成两行。
+ *
+ * 本文件的做法：
+ *  - 手机上 **侧栏 / 暴乱面板改为可开合浮层**（关卡由 React 控制 .open），
+ *    地图独占剩余空间；
+ *  - `.action-panel` 改为**参与文档流**，贴着棋盘底部，不再用魔法数字；
+ *  - 手牌卡片按屏宽自适应缩小；
+ *  - 全部固定元素接上 safe-area-inset（刘海 / 小白条 / 圆角）。
+ * ============================================================= */
+
+/* ── 抽屉遮罩：点空白处收起侧栏 ──
+   放在最底层但高于棋盘，低于侧栏本身。 */
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 90;
+}
+
+/* 手机上隐藏滚动条（视觉更干净，仍可滚动） */
+@media (max-width: 900px) {
+  ::-webkit-scrollbar { width: 0; height: 0; }
+}
+
+@media (max-width: 900px) {
+  /* ─────────────────────────────────────────────
+   * 1. 顶栏：单行不换行，允许横向滚动
+   * ───────────────────────────────────────────── */
+  .game-topbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: 5px calc(8px + var(--safe-right)) 5px calc(8px + var(--safe-left));
+    gap: 6px;
+    /* 顶栏本身不吃安全区高度，交给 .app 统一处理 */
+  }
+  .game-topbar-left,
+  .game-topbar-right {
+    flex: 0 0 auto;
+    gap: 6px;
+  }
+  .turn-info {
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  /* 手机上"镇长：xxx"太占地方，缩到一行并允许省略 */
+  .game-topbar-right > span {
+    font-size: 11px !important;
+    margin-right: 2px !important;
+    max-width: 34vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pause-btn {
+    /* 触控目标 ≥ 40px（iOS HIG 建议 44px） */
+    min-width: 40px;
+    min-height: 36px;
+    padding: 4px 10px;
+    font-size: 17px;
+  }
+
+  /* ─────────────────────────────────────────────
+   * 2. 主体：地图独占，两侧面板全部浮层化
+   * ───────────────────────────────────────────── */
+  .game-main {
+    /* 保持 row，但只有一个可见子元素（浮层是 absolute） */
+    flex-direction: row;
+    position: relative;
+  }
+  .game-board-wrap {
+    flex: 1 1 100%;
+    width: 100%;
+    padding: 2px;
+    /* 棋盘 viewBox 是 -10 -7 120 117（≈0.945，接近正方形）。
+       竖屏手机上若按宽度缩放，会在上下留出大片空白、棋盘本身很小。
+       所以改成**按高度铺满**，宽度不够时允许左右拖动查看；
+       另开双指缩放（下方 touch-action）。 */
+    overflow-x: auto;
+    overflow-y: hidden;
+    align-items: center;
+    justify-content: flex-start;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+  .board-svg {
+    /* 手机上允许双指缩放棋盘（board.css 里是 touch-action:none） */
+    touch-action: pinch-zoom;
+    /* 高度铺满，宽度按比例自然延展（SVG 有 viewBox，会等比缩放） */
+    width: auto;
+    height: 100%;
+    max-height: 100%;
+    min-width: 100%;
+    /* 单指拖动用于平移棋盘；双指留给浏览器缩放 */
+    flex: 0 0 auto;
+  }
+
+  /* 侧栏 → 右侧抽屉浮层 */
+  .game-sidebar {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(86vw, 360px);
+    flex: none;
+    z-index: 100;
+    flex-direction: column;          /* 抽屉里恢复竖向，好读 */
+    overflow-y: auto;
+    overflow-x: hidden;
+    border-left: 1px solid var(--color-border);
+    border-top: none;
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+    padding-right: var(--safe-right);
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.5);
+    /* 收起：移出屏幕；展开：滑入 */
+    transform: translateX(105%);
+    transition: transform 0.22s ease;
+    /* 收起时不接收点击 */
+    pointer-events: none;
+  }
+  .game-sidebar.open {
+    transform: translateX(0);
+    pointer-events: auto;
+  }
+  .game-sidebar-section {
+    border-bottom: 1px solid var(--color-border);
+    border-right: none;
+    min-width: 0;                    /* 覆盖旧的 min-width: 200px */
+    padding: 10px;
+  }
+  /* 日志在抽屉里给固定高度，别把别的区块顶出去 */
+  .game-sidebar-section.log-section {
+    flex: 0 0 auto;
+    max-height: 32vh;
+  }
+  .log-box {
+    font-size: 12px;                 /* 11px 在手机上太小 */
+  }
+
+  /* 暴乱面板 → 左侧抽屉浮层 */
+  .game-chaos-side.mobile-left {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(86vw, 340px);
+    z-index: 100;
+    overflow-y: auto;
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+    padding-left: var(--safe-left);
+    box-shadow: 8px 0 24px rgba(0, 0, 0, 0.5);
+    transform: translateX(-105%);
+    transition: transform 0.22s ease;
+    pointer-events: none;
+  }
+  .game-chaos-side.mobile-left.open {
+    transform: translateX(0);
+    pointer-events: auto;
+  }
+  /* 浮层里的卡牌按钮给足触控高度 */
+  .chaos-card-btn {
+    padding: 10px 12px;
+  }
+  .chaos-card-name { font-size: 13px; }
+  .chaos-cost { font-size: 11px; }
+
+  /* ─────────────────────────────────────────────
+   * 3. 操作面板：不再 fixed，贴着棋盘底部
+   *
+   * 原先 `position: fixed; bottom: 140px` 是个魔法数字，
+   * 手机上直接压在地图上。改为在文档流里，由棋盘容器 flex 定位。
+   * ───────────────────────────────────────────── */
+  .game-board-wrap {
+    position: relative;
+  }
+  .action-panel {
+    position: absolute;              /* 相对棋盘容器，而不是视口 */
+    left: 50%;
+    right: auto;
+    bottom: calc(6px + var(--safe-bottom));
+    transform: translateX(-50%);
+    max-width: calc(100vw - 16px);
+    max-height: 46vh;                /* 选项多时内部滚动，不遮住棋盘 */
+    overflow-y: auto;
+    padding: 8px;
+    gap: 6px;
+    /* 面板本身要能点（遮罩层 pointer-events 已收敛） */
+    z-index: 60;
+  }
+  .action-prompt {
+    font-size: 13px;                 /* 12px 偏小 */
+    padding: 2px 4px;
+    flex: 1 1 100%;                  /* 提示独占一行，按钮下一行 */
+    text-align: center;
+  }
+  .action-panel button {
+    min-height: 40px;
+    padding: 8px 14px;
+    font-size: 14px;
+  }
+
+  /* 选择列表：一格一个，别挤成一条 */
+  .choice-list,
+  .misfortune-list {
+    flex: 1 1 100%;
+    max-height: 38vh;
+    overflow-y: auto;
+  }
+  .choice-list button,
+  .misfortune-list button {
+    min-height: 38px;
+    font-size: 13px;
+  }
+  .option-list button {
+    min-height: 38px;
+  }
+  .option-reason { font-size: 11px; }
+
+  /* 被查看的对方手牌：手机上换行显示 */
+  .revealed-hand-card { font-size: 12px; padding: 4px 8px; }
+
+  /* ─────────────────────────────────────────────
+   * 4. 手牌：自适应缩小 + 安全区
+   * ───────────────────────────────────────────── */
+  .hand {
+    /* 手牌高度按屏宽收缩：110px 宽的卡片在 360px 屏上刚好放 3 张 */
+    min-height: 0;
+    padding: 6px calc(8px + var(--safe-right)) calc(8px + var(--safe-bottom)) calc(8px + var(--safe-left));
+    gap: 5px;
+    scroll-padding-inline: 8px;
+  }
+  .card {
+    width: var(--card-w, 92px);
+    min-height: 132px;
+  }
+  .hand .card { flex: 0 0 var(--card-w, 92px); }
+
+  /* ─────────────────────────────────────────────
+   * 5. 弹层（卡牌详情 / 角色详情 / 结算）适配
+   * ───────────────────────────────────────────── */
+  .card-detail-overlay,
+  .char-detail-overlay {
+    padding: calc(10px + var(--safe-top)) 10px calc(10px + var(--safe-bottom));
+  }
+  .card-detail-panel,
+  .char-detail-panel {
+    width: min(94vw, 560px) !important;
+    max-height: calc(100dvh - 40px);
+    overflow-y: auto;
+  }
+}
+
+/* ── 超窄屏（≤380px，如 iPhone SE / 老安卓）── */
+@media (max-width: 380px) {
+  .card { width: var(--card-w, 80px); min-height: 120px; }
+  .hand .card { flex: 0 0 var(--card-w, 80px); }
+  .game-topbar-right > span { max-width: 26vw; }
+  .action-panel { max-height: 50vh; }
+}
+
+/* ── 横屏手机：竖向空间紧张，压扁顶栏与手牌 ──
+   横屏时通常高度 ≤ 450px，手牌占 132px 太浪费。 */
+@media (max-width: 900px) and (orientation: landscape) and (max-height: 500px) {
+  .game-topbar { padding-top: 2px; padding-bottom: 2px; }
+  .pause-btn { min-height: 30px; min-width: 34px; font-size: 15px; }
+  .hand {
+    min-height: 0;
+    padding-top: 3px;
+    padding-bottom: calc(3px + var(--safe-bottom));
+  }
+  .card { width: var(--card-w, 78px); min-height: 108px; }
+  .hand .card { flex: 0 0 var(--card-w, 78px); }
+  .action-panel { max-height: 56vh; bottom: calc(3px + var(--safe-bottom)); }
+  .game-sidebar { width: min(60vw, 320px); }
+}
+
+/* ── 触控设备：悬停态没意义，去掉 hover 位移避免"点一下就跳" ── */
+@media (hover: none) {
+  button:active:not(:disabled) { transform: none; }
+}
+
+/* =============================================================
+ * 菜单 / 房间 / 选角 / 结算：安全区 + 窄屏留白
+ *
+ * 这几个页面在窄屏不会"被遮挡"，但内容会顶到刘海/圆角，
+ * 底部按钮会被小白条压住。统一接上 safe-area，并给底部留空间。
+ * ============================================================= */
+@media (max-width: 900px) {
+  .menu,
+  .lobby,
+  .charselect,
+  .gameover {
+    padding-left: calc(16px + var(--safe-left));
+    padding-right: calc(16px + var(--safe-right));
+    padding-top: calc(16px + var(--safe-top));
+    padding-bottom: calc(20px + var(--safe-bottom));
+  }
+
+  /* 内容可能比一屏高：允许纵向滚动，并从顶部开始排 */
+  .menu,
+  .charselect {
+    justify-content: flex-start;
+    overflow-y: auto;
+  }
+  .menu { gap: 16px; }
+  .menu-card { padding: 16px; width: min(420px, 100%); }
+  .menu-title { letter-spacing: 1px; }
+
+  /* 选角网格：窄屏收窄最小宽度（220px 在 360px 屏上会挤成 1 列） */
+  .char-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)) !important;
+    gap: 8px !important;
+  }
+
+  /* 房间 / 结算的按钮：竖排更好点 */
+  .lobby-actions,
+  .gameover-actions {
+    flex-direction: column;
+    width: 100%;
+  }
+  .lobby-actions button,
+  .gameover-actions button {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  /* 触控目标统一加大；输入框 ≥16px 防 iOS 聚焦时自动放大页面 */
+  button { min-height: 38px; }
+  input, select { min-height: 38px; font-size: 16px; }
+}

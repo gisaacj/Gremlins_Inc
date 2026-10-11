@@ -14,7 +14,8 @@
 
 .card {
   flex: 0 0 auto;
-  width: 110px;
+  /* 宽度走变量：桌面 110px，手机上由 mobile.css 按屏宽覆盖 */
+  width: var(--card-w, 110px);
   min-height: 160px;
   background: var(--color-panel);
   border: 1px solid var(--color-border);

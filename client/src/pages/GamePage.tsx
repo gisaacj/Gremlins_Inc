@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useIsMobile } from '../hooks/useMediaQuery.js';
 import { useGameStore } from '../store/game.js';
 import { BoardView } from '../components/BoardView.js';
 import { ResourcePanel, PlayerList, LogBox, PermanentPanel } from '../components/Hud.js';
@@ -32,7 +33,11 @@ function NumericBid({
         step={1}
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        style={{ width: 90 }}
+        // 手机上弹**数字键盘**（否则要切键盘才能输金额）
+        inputMode="numeric"
+        enterKeyHint="done"
+        // 不用固定 90px：窄屏上和按钮挤在一行会溢出
+        style={{ width: 'clamp(64px, 22vw, 90px)' }}
         aria-label="出价金额"
       />
       <span style={{ fontSize: 12 }}>{unit}</span>
@@ -68,6 +73,16 @@ export function GamePage() {
   const cancelMovePreview = useGameStore((s) => s.cancelMovePreview);
 
   const [paused, setPaused] = useState(false);
+
+  // ── 移动端布局 ──
+  // 手机上棋盘两侧的"暴乱卡牌 / 状态侧栏"必须让位给棋盘，改成可开合的浮层，
+  // 否则棋盘被挤到只剩几十像素（用户反馈"适配不好、信息被遮挡"）。
+  const isMobile = useIsMobile();
+  const [drawer, setDrawer] = useState<null | 'info' | 'chaos'>(null);
+  // 切到窄屏时收起浮层，避免残留
+  useEffect(() => {
+    if (!isMobile) setDrawer(null);
+  }, [isMobile]);
 
   if (!game) {
     return (
@@ -114,6 +129,25 @@ export function GamePage() {
               镇长：{game.players.find((p) => p.id === game.mayorId)?.name}
             </span>
           )}
+          {/* 手机上侧栏是抽屉：给一个明确的入口，否则玩家看不到自己和别人的状态 */}
+          {isMobile && (
+            <button
+              className={`pause-btn ${drawer === 'info' ? 'active' : ''}`}
+              onClick={() => setDrawer(drawer === 'info' ? null : 'info')}
+              title="我的状态 / 玩家 / 日志"
+            >
+              ☰
+            </button>
+          )}
+          {isMobile && chaosEnabled && (game.chaosPool?.length ?? 0) > 0 && (
+            <button
+              className={`pause-btn ${drawer === 'chaos' ? 'active' : ''}`}
+              onClick={() => setDrawer(drawer === 'chaos' ? null : 'chaos')}
+              title="暴乱卡牌"
+            >
+              ◆
+            </button>
+          )}
           <button
             className={`pause-btn ${paused ? 'active' : ''}`}
             onClick={() => setPaused(!paused)}
@@ -135,10 +169,10 @@ export function GamePage() {
       )}
 
       {/* 主体 */}
-      <div className="game-main">
+      <div className={`game-main${isMobile ? ' mobile' : ''}`}>
         {/* 左侧：暴乱卡牌面板 */}
         {chaosEnabled && (game.chaosPool?.length ?? 0) > 0 && (
-          <div className="game-chaos-side">
+          <div className={`game-chaos-side${isMobile && drawer === 'chaos' ? ' open' : ''}${isMobile ? ' mobile-left' : ''}`}>
             <details>
               <summary>暴乱卡牌（{game.chaosPool!.length} 张剩余）</summary>
               <div className="chaos-card-list">
@@ -304,7 +338,7 @@ export function GamePage() {
         </div>
 
         {/* 右侧栏 */}
-        <div className="game-sidebar">
+        <div className={`game-sidebar${isMobile && drawer === 'info' ? ' open' : ''}`}>
           <div className="game-sidebar-section">
             <h4>我的状态</h4>
             <ResourcePanel game={game} myPlayer={myPlayer} />
@@ -325,6 +359,11 @@ export function GamePage() {
           </div>
         </div>
       </div>
+
+      {/* 移动端抽屉遮罩：点空白处收起 */}
+      {isMobile && drawer && (
+        <div className="drawer-backdrop" onClick={() => setDrawer(null)} />
+      )}
 
       {/* 手牌 */}
       <div className="hand">

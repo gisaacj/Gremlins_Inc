@@ -34,6 +34,9 @@ npm-debug.log*
 # app/src/main/assets/public 等）。
 !client/android/
 
+# 本地 GitHub token（不要入库）
+tools/.github-token
+
 # Env
 .env
 .env.local

@@ -149,15 +149,63 @@ check('a066 的移动段是 SpecialMove（没有 MOVE 标记，moveActions 为�
     '前提：moveText 写明"改成 4 点"');
 });
 
-check('a066 用它移动：支付 20、点数改为 4', () => {
+check('a066 用它移动：先问"付 20 改 4 步 / 不付走 3 步"（用户裁定）', () => {
   const { st, a, map } = setup();
   const c = CARD_BY_NAME['a066']!;
   a.cellId = map.cells.find((x) => x.out.length > 0)!.id;
   a.hand = [c.id];
-  assert.equal(moveCostOf(st, a, c.id), 20, `移动代价应为 20，实际 ${moveCostOf(st, a, c.id)}`);
+  // 这 20 金是**可选升级**，不是"付不起不让动"的门槛 → moveCostOf 应为 0
+  assert.equal(moveCostOf(st, a, c.id), 0,
+    `a066 不该有硬性移动代价，实际 ${moveCostOf(st, a, c.id)}`);
+
   moveWithCard(st, a.id, c.id, map.cells.find((x) => x.id === a.cellId)!.out[0]);
-  // 用卡牌**移动**只付 `[m]` 代价；卡价只在"打出效果"时付。
-  assert.equal(a.res.money, 1000 - 20, `应只扣移动代价 20，实际扣了 ${1000 - a.res.money}`);
+  assert.ok(st.pending, '应挂起问二选一');
+  assert.ok(st.pending!.kind.startsWith('specialMove:'),
+    `挂起种类应为 specialMove:，实际 ${st.pending!.kind}`);
+  assert.equal(st.pending!.options.length, 2, '应有两个选项');
+  const labels = st.pending!.options.map((o) => o.label).join(' | ');
+  assert.ok(/20/.test(labels) && /4/.test(labels), `应含"20"与"4"，实际 ${labels}`);
+  assert.ok(/\b3\b/.test(labels), `不付应走 3 步（卡牌数据 MovePoints=3），实际 ${labels}`);
+});
+
+check('a066 选"付 20"：扣钱、走 4 步', () => {
+  const { st, a, map } = setup(1000);
+  const c = CARD_BY_NAME['a066']!;
+  a.cellId = map.cells.find((x) => x.out.length > 0)!.id;
+  a.hand = [c.id];
+  const dest = map.cells.find((x) => x.id === a.cellId)!.out[0];
+  moveWithCard(st, a.id, c.id, dest);
+  const r = answerChoice(st, a.id, ['pay']);
+  st.pending = r.pending;
+  assert.equal(r.ok, true, `应答应成功：${r.error}`);
+  assert.equal(a.res.money, 1000 - 20, `应扣 20，实际扣了 ${1000 - a.res.money}`);
+  assert.equal(a.lastMoveSteps, 4, `步数应为 4，实际 ${a.lastMoveSteps}`);
+});
+
+check('a066 选"不付"：不扣钱、走 3 步', () => {
+  const { st, a, map } = setup(1000);
+  const c = CARD_BY_NAME['a066']!;
+  a.cellId = map.cells.find((x) => x.out.length > 0)!.id;
+  a.hand = [c.id];
+  const dest = map.cells.find((x) => x.id === a.cellId)!.out[0];
+  moveWithCard(st, a.id, c.id, dest);
+  const r = answerChoice(st, a.id, ['free']);
+  st.pending = r.pending;
+  assert.equal(a.res.money, 1000, '不该扣钱');
+  assert.equal(a.lastMoveSteps, 3, `步数应为 3，实际 ${a.lastMoveSteps}`);
+});
+
+check('a066 钱不够时仍然能"不付"走掉（不是硬性门槛）', () => {
+  const { st, a, map } = setup(5);
+  const c = CARD_BY_NAME['a066']!;
+  a.cellId = map.cells.find((x) => x.out.length > 0)!.id;
+  a.hand = [c.id];
+  moveWithCard(st, a.id, c.id, map.cells.find((x) => x.id === a.cellId)!.out[0]);
+  const r = answerChoice(st, a.id, ['free']);
+  st.pending = r.pending;
+  assert.equal(r.ok, true, `只有 5 金也该能走：${r.error}`);
+  assert.equal(a.res.money, 5, '不该扣钱');
+  assert.equal(a.lastMoveSteps, 3, `步数应为 3，实际 ${a.lastMoveSteps}`);
 });
 
 check('[m] 代价付不起就不能用它移动（用户明确要求）', () => {

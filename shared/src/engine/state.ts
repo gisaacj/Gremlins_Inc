@@ -377,7 +377,46 @@ export function preMoveActions(card: CardAction[] | undefined): CardAction[] {
  * 注意 a172「认错」的 `[m]` 代价是**选票**、a140 还有 -1 罪恶 ——
  * 那些不是"付不起就不能动"的门槛（原版只对金钱做门槛）。
  */
+/**
+ * 这张牌是不是"特殊移动 + 可选升级"型（目前只有 a066「巧夺先机」）。
+ *
+ * 判据：`specialMove === true` 且 `actions` 里有 `SpecialMove`，
+ * **并且没有 `MOVE` 分隔符**（有 `MOVE` 的走 `moveActions` 那套，
+ * 例如 a015/a024 的 `[m]` 是硬性代价）。
+ */
+export function isSpecialMoveChoiceCard(cardId: string): boolean {
+  const card = CARD_BY_ID[cardId];
+  if (!card || !card.specialMove) return false;
+  const acts = card.actions ?? [];
+  if (acts.some((a) => String(a.type) === 'MOVE')) return false;
+  return acts.some((a) => String(a.type) === 'SpecialMove');
+}
+
+/** `SpecialMove` 里要付的金额（a066 = 20） */
+export function specialMoveCostOf(card: ActionCard): number {
+  for (const a of card.actions ?? []) {
+    if (String(a.type) !== 'SpecialMove') continue;
+    const n = (a.params ?? []).find((x) => /^\d+$/.test(x));
+    if (n) return Number(n);
+  }
+  return 0;
+}
+
+/**
+ * 支付后移动点数改成几。
+ *
+ * ⚠️ 原版文案写"change move points to **4**"，但**反编译数据里没有这个 4**
+ * （`SpecialMove` 只有一个参数 `20`）。所以按文案取 4，作为唯一依据。
+ */
+export function specialMoveUpgradeOf(_card: ActionCard): number {
+  return 4;
+}
+
 export function moveCostOf(state: EngineState, p: EnginePlayer, cardId: string): number {
+  // a066 的那 20 金是**可选升级**（不付也能走），不是"付不起就不能动"的
+  // 门槛 —— 它由 `specialMove:` 挂起单独处理（见 `resolvePending`）。
+  // 若在这里也算进门槛，没钱就用不了这张牌，与用户裁定矛盾。
+  if (isSpecialMoveChoiceCard(cardId)) return 0;
   const card = CARD_BY_ID[cardId];
   if (!card) return 0;
   let due = 0;
@@ -1001,6 +1040,38 @@ export function resolvePending(
       state.moveCursor.destTileId = dest;
     }
     return result;
+  }
+
+  // ── a066「巧夺先机」：要不要付钱升级步数 ──
+  //
+  // 用户裁定："a066 是可选 —— 扣 20 金 移动 4，不扣 移动 3（卡牌数据值）。
+  //            那个 100 金是使用卡牌才需要支付，**移动是不用的**。"
+  //
+  // 因为它是"可选升级"而不是"硬性代价"，所以走不了 `moveCostOf` 那套
+  // "付不起就不让动"的门槛，必须单独问一次（在移动开始之前）。
+  if (pending.kind.startsWith('specialMove:')) {
+    const moveCardId = pending.kind.slice('specialMove:'.length);
+    const player = getPlayer(state, playerId);
+    if (!player) return { ok: false, reason: '玩家不存在' };
+    const card = CARD_BY_ID[moveCardId];
+    const pay = String(answer[0] ?? '') === 'pay';
+    const cost = card ? specialMoveCostOf(card) : 0;
+    const upgraded = card ? specialMoveUpgradeOf(card) : 0;
+
+    state.pending = undefined;
+    if (pay && cost > 0) {
+      if (player.res.money < cost) return { ok: false, reason: `付不起 ${cost} 金钱` };
+      addRes(player, 'money', -cost);
+      player.flags['customMoveSteps'] = upgraded > 0 ? upgraded : (card?.move ?? 0);
+      pushLog(state, playerId,
+        `巧夺先机：支付 ${cost} 金钱，移动点数改为 ${player.flags['customMoveSteps']}`);
+    } else {
+      player.flags['customMoveSteps'] = card?.move ?? 0;
+      pushLog(state, playerId, `巧夺先机：不支付，走 ${player.flags['customMoveSteps']} 步`);
+    }
+    // 这张牌没有"硬性移动代价"，清掉可能残留的预扣标记
+    delete player.flags['moveCostPaid'];
+    return startMove(state, playerId, moveCardId);
   }
 
   // 冒险格（有保险）掷到 1：选对手抽厄运

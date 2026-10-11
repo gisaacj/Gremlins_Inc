@@ -10,6 +10,7 @@ import {
 } from './model.js';
 import {
   canAffordCard, canMoveWithCard, canPlayCard, createState, endTurn, moveCostOf,
+  isSpecialMoveChoiceCard, specialMoveCostOf, specialMoveUpgradeOf,
   finishTurnActions, resolveLanding, resolvePending, startMove, takeJailTurn,
 } from './state.js';
 import type { EngineInitArgs } from './state.js';
@@ -158,6 +159,41 @@ export function moveWithCard(
 
   const card = CARD_BY_ID[cardId]!;
   if (destinationTileId && !getCell(state, destinationTileId)) return fail('目的地不存在');
+
+  // ── 特殊移动牌 a066「巧夺先机」：点"用它移动"时先问二选一 ──
+  //
+  // 用户裁定（原话）：
+  //   "a066 是可选 —— 扣 20 金 移动 4，不扣 移动 2（按卡牌数据是 3）。
+  //    那个 100 金是使用卡牌才需要支付，**移动是不用的**。"
+  //
+  // 所以这 20 金**不是**移动的硬性代价（付不起也能走），而是"要不要升级步数"
+  // 的选择。因此它不能走 `moveCostOf` 那套"付不起就不让动"的门槛，
+  // 必须在**移动开始之前**单独问一次（与 a059「二手货」选对手同一时机）。
+  if (isSpecialMoveChoiceCard(cardId) && p.flags['customMoveSteps'] == null) {
+    const cost = specialMoveCostOf(card);
+    const upgraded = specialMoveUpgradeOf(card);
+    const pending: PendingChoice = {
+      kind: `specialMove:${cardId}`,
+      playerId,
+      prompt: `巧夺先机：支付 ${cost} 金钱把移动点数改为 ${upgraded}？`,
+      options: [
+        { value: 'pay', label: `支付 ${cost} 金钱 → 移动 ${upgraded} 步` },
+        { value: 'free', label: `不支付 → 移动 ${card.move} 步` },
+      ],
+      min: 1,
+      max: 1,
+      resume: {
+        actions: [],
+        index: 0,
+        targets: [],
+        source: '巧夺先机',
+        ownerId: playerId,
+        scratch: { phase: 'specialMove' },
+      },
+    };
+    state.pending = pending;
+    return ok(pending);
+  }
 
   // 弃牌移动牌（a059 二手货）：move=0，选一个对手，随机弃其一张牌，
   // 以该牌 MovePoints 为步数，再给对手补 1 张。

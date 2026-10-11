@@ -297,6 +297,16 @@ export class AIPlayer {
   /** 从挂起决策里挑答案：取前 min 个 */
   private pickChoice(state: EngineState): string[] {
     const pend = state.pending!;
+    // ── a066「巧夺先机」的"要不要付 20 升级到 4 步"──
+    //
+    // ⚠️ 这里**故意选"不付"**：`findBestMove` 是按卡牌基础移动点数
+    // （`card.move` = 3）BFS 出目的地并评估收益的；若这里擅自付钱变成 4 步，
+    // 实际落点会与它评估过的目的地不一致（可能多走一步走到意料之外的格子）。
+    // 选"不付"能让"评估"与"执行"用同一个步数。
+    if (pend.kind.startsWith('specialMove:')) {
+      const free = pend.options.find((o) => o.value === 'free');
+      if (free) return ['free'];
+    }
     const n = Math.max(1, pend.min ?? 1);
     return pend.options.slice(0, n).map((o) => o.value);
   }

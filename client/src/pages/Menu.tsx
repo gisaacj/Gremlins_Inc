@@ -37,8 +37,52 @@ export function Menu() {
   });
   const [serverSaved, setServerSaved] = useState(false);
 
+  /**
+   * 自检结果。
+   *
+   * ⚠️ 为什么需要这个按钮：
+   * 移动端"连不上"有三种完全不同的原因，但在界面上表现一样（一直转/超时）：
+   *   1. 地址被系统或路由器拦掉（明文 HTTP、运营商封非标端口）
+   *   2. 服务端没起 / 端口不对
+   *   3. socket.io 本身的问题
+   * `fetch` 能把这些区分开 —— 它成功说明"这个地址这条端口在网络上是通的"，
+   * 失败则能拿到**原始错误**（`Failed to fetch` / `ERR_...`）。
+   */
+  const [selfTest, setSelfTest] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+
+  const runSelfTest = async () => {
+    setTesting(true);
+    setSelfTest('测试中…');
+    const base = normalizeServerUrl(serverUrl);
+    const lines: string[] = [`目标: ${base}`];
+    const t0 = Date.now();
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      const r = await fetch(`${base.replace(/\/$/, '')}/api/health`, { signal: ctrl.signal });
+      clearTimeout(timer);
+      const body = (await r.text()).slice(0, 80);
+      lines.push(`✓ HTTP ${r.status}（${Date.now() - t0}ms）`);
+      lines.push(`  响应: ${body}`);
+      lines.push('结论: 网络层可达 → 若仍连不上，是 socket.io 层的问题');
+    } catch (e) {
+      const err = e as Error;
+      lines.push(`✗ ${err.name}: ${err.message}（${Date.now() - t0}ms）`);
+      if (err.name === 'AbortError') {
+        lines.push('结论: 8 秒无响应 —— 地址/端口被丢弃（云安全组、服务器防火墙，或运营商封非标端口）');
+      } else {
+        lines.push('结论: 请求被本机直接拒绝 —— 明文 HTTP 被拦，或地址格式不对');
+      }
+    }
+    setSelfTest(lines.join('\n'));
+    setTesting(false);
+  };
+
   const handleSaveServer = () => {
-    setServerUrl(normalizeServerUrl(serverUrl));
+    const normalized = normalizeServerUrl(serverUrl);
+    setServerUrl(normalized);
+    setServerUrlInput(normalized);
     setServerSaved(true);
     // 保存后会断开旧连接；重新加载一次拿到新连接
     setTimeout(() => window.location.reload(), 300);
@@ -212,13 +256,19 @@ export function Menu() {
               <input
                 type="text"
                 value={serverUrl}
-                onChange={(e) => { setServerUrlInput(e.target.value); setServerSaved(false); }}
+                onChange={(e) => { setServerUrlInput(e.target.value); setServerSaved(false); setSelfTest(null); }}
                 placeholder="例如 192.168.1.10:3000"
               />
               <button onClick={handleSaveServer} disabled={!serverUrl.trim()}>
                 {serverSaved ? '已保存' : '保存'}
               </button>
+              <button onClick={runSelfTest} disabled={testing || !serverUrl.trim()}>
+                {testing ? '测试中…' : '测试连接'}
+              </button>
             </div>
+            {selfTest && (
+              <pre className="menu-selftest">{selfTest}</pre>
+            )}
             <div className="menu-status">
               {native
                 ? '移动端需填写运行服务端的电脑 IP 与端口（例如 192.168.1.10:3000）'

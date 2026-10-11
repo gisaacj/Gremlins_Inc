@@ -146,3 +146,20 @@
 .solo-ability-item span {
   color: var(--color-text-muted);
 }
+
+/* 连接自检结果的输出块（保留原始错误文本，便于排查） */
+.menu-selftest {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  padding: 8px;
+  margin-top: 6px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 180px;
+  overflow: auto;
+}

@@ -44,22 +44,53 @@ const headers = {
 const git = (...args) => execFileSync('git', args, { cwd: CWD, encoding: 'utf8', maxBuffer: 1 << 28 }).trim();
 
 const api = async (method, path, body) => {
-  const res = await fetch(`${API}${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await res.text();
-  if (!res.ok) {
+  // ── 带重试的调用 ──
+  //
+  // 实测：GitHub 的 `git/blobs` 接口对本机会**随机**返回 502，
+  // 同一个 blob 重试就成功（而 githubstatus.com 显示一切正常）。
+  // 原实现遇到第一个 502 就 throw → 整个推送中断，看起来像"权限/参数错误"。
+  // 这里对 5xx / 429 / 网络异常做指数退避重试。
+  const MAX = 8;
+  let lastErr;
+  for (let attempt = 1; attempt <= MAX; attempt++) {
+    let res;
+    try {
+      res = await fetch(`${API}${path}`, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch (e) {
+      lastErr = new Error(`${method} ${path} → 网络异常: ${e.message}`);
+      if (attempt < MAX) {
+        await new Promise((r) => setTimeout(r, Math.min(1000 * 2 ** (attempt - 1), 15000)));
+        continue;
+      }
+      throw lastErr;
+    }
+    const text = await res.text();
+
+    if (res.ok) return text ? JSON.parse(text) : null;
+
+    // 需要人工修的错误：权限不足 —— 重试没用，直接抛
     if (res.status === 403 && /Resource not accessible/i.test(text)) {
       throw new Error(
         `${method} ${path} → 403：细粒度 PAT 缺少写权限。`
         + '请在 token 设置里把「Contents」改为 Read and write。',
       );
     }
-    throw new Error(`${method} ${path} → HTTP ${res.status}\n${text.slice(0, 400)}`);
+    // 401/404/422 等"请求本身有问题"的，重试也没用
+    const retryable = res.status >= 500 || res.status === 429;
+    lastErr = new Error(`${method} ${path} → HTTP ${res.status}\n${text.slice(0, 400)}`);
+    if (!retryable || attempt === MAX) throw lastErr;
+
+    const wait = Math.min(1000 * 2 ** (attempt - 1), 15000);
+    if (attempt === 1 || attempt % 3 === 0) {
+      console.log(`    ${method} ${path.split('/').pop()} → HTTP ${res.status}，${wait}ms 后重试（第 ${attempt}/${MAX} 次）`);
+    }
+    await new Promise((r) => setTimeout(r, wait));
   }
-  return text ? JSON.parse(text) : null;
+  throw lastErr;
 };
 
 const HEAD = arg('head', git('rev-parse', 'HEAD'));

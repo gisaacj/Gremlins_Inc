@@ -27,6 +27,7 @@ import {
 } from './model.js';
 import { addRes, hasRes, transferRes } from './resources.js';
 import { discardFromHand, drawMisfortune, drawTo, rollDice } from './interp.js';
+import { HAND_SIZE, canPlayCard } from './state.js';
 import { abilitiesOf, excavationCount, hasExcavation, insuranceCost } from './abilities.js';
 
 // =============================================================
@@ -255,6 +256,20 @@ function cellOptions(state: EngineState, p: EnginePlayer): OptionSpec[] {
 
   // 角色能力带来的可选动作：与格子的 OptionalFlag 无关
   out.push(...abilityOptions(state, p, cell.cellType));
+
+  // ── a121「机械帮手」（永久卡，`discardIfNoAction`）──
+  //
+  // 卡面："If you cannot play a card for action in the place where you visit,
+  //        you can discard 1 card from your hand."
+  // 判据：持有该永久卡 + 本回合已移动 + **当前地点没有任何可打出的牌**。
+  if (p.flags['discardIfNoAction'] && p.movedThisTurn && p.hand.length > 0
+    && p.hand.every((id) => !canPlayCard(state, p, id).ok)) {
+    out.push({
+      id: 'perm.discardToRedraw',
+      label: `机械帮手：弃 ${p.flags['discardIfNoAction']} 张手牌再抽`,
+      description: '到站后无牌可打时可弃牌换新牌（永久卡「机械帮手」）',
+    });
+  }
 
   return out;
 }
@@ -776,6 +791,25 @@ export function doOption(
     // 收入格被标为 `autoCellEffect: false`（见 gamedata/decks.ts），
     // 所以落地不自动结算，由这里的两个选项决定。
     // 选完即结束本回合（`runOption` 之后会换人）。
+    // ── a121「机械帮手」：到站后无牌可打时弃牌换新牌 ──
+    //
+    // 卡面："If you cannot play a card for action in the place where you visit,
+    //        you can discard 1 card from your hand."
+    // 选项由 `cellOptions` 在满足条件时产生（持有永久卡 + 已移动 + 无牌可打）。
+    case 'perm': {
+      if (parts[1] === 'discardToRedraw') {
+        if (!p.hand.length) return fail('没有手牌');
+        const n = Number(p.flags['discardIfNoAction']) || 1;
+        const dropped = discardFromHand(state, p, n);
+        // `drawTo(state, p, k)` 是"再抽 k 张"，不是"补到 k 张" ——
+        // 所以要先算差多少，否则手牌会超过上限（实测 3 张弃 1 后抽 6 → 8 张）。
+        const drawn = drawTo(state, p, Math.max(0, HAND_SIZE - p.hand.length));
+        logIt(`机械帮手：弃 ${dropped.length} 张手牌，补抽至 ${p.hand.length} 张（新抽 ${drawn.length} 张）`);
+        return doneUsed(`弃 ${dropped.length} 张、抽 ${drawn.length} 张`);
+      }
+      return fail('未知的永久卡动作');
+    }
+
     case 'excavation': {
       if (cell.cellType !== 'Income') return fail('只能在收入格使用');
       if (!hasExcavation(p)) return fail('没有「挖宝」能力');

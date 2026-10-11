@@ -481,6 +481,20 @@ function handleFlag(state: EngineState, a: FlagArgs): boolean {
     case 'immediate':
       return false;
 
+    // a121「机械帮手」：到站后若打不出牌，可以弃 1 张手牌。
+    //
+    // ⚠️ 这个 flag 之前**只注册、没人写**：`handleFlag` 落 `default: return false`，
+    // 于是 `holder.flags.discardIfNoAction` 永远是 undefined，
+    // 「机械帮手」这张卡完全没作用。这里把它真正落到持有者身上；
+    // 之后由 `options.ts` 的 `cellOptions` 读它产生"弃1张"选项。
+    case 'discardIfNoAction': {
+      if (!isSelf) return false;
+      holder.flags['discardIfNoAction'] = Number(value) || 1;
+      logIt(state, holder,
+        `永久卡「${cardName}」：到站无牌可打时可弃 1 张手牌`);
+      return true;
+    }
+
     default:
       return false;
   }

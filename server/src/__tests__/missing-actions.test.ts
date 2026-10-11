@@ -17,8 +17,8 @@
 import assert from 'node:assert/strict';
 import { ACTION_CARDS, CARD_BY_NAME, JAIL_CARDS } from '@gremlins/shared/gamedata';
 import {
-  CHARACTERS, answerChoice, createState, getMap, getPlayer, moveCostOf, moveWithCard,
-  playCard, runActions,
+  CHARACTERS, answerChoice, availableOptions, createState, getMap, getPlayer, moveCostOf,
+  moveWithCard, playCard, playEffectCard, runActions, runOption,
 } from '@gremlins/shared/engine';
 import type { EnginePlayer, EngineState } from '@gremlins/shared/engine';
 
@@ -188,6 +188,41 @@ check('a129「贿赂有道」的代价随罪恶变动', () => {
   a.res.malice = 5;
   const higher = moveCostOf(st, a, c.id);
   assert.ok(higher > base, `罪恶更高时代价应更高（${base} → ${higher}）`);
+});
+
+console.log('\n=== Perm_Discard（a121 机械帮手）===');
+
+check('a121 打出后 flag 落到持有者身上', () => {
+  const { st, a, map } = setup();
+  const c = CARD_BY_NAME['a121']!;
+  a.cellId = map.cells.find((x) => x.cellTypeId === c.cellTypeId)!.id;
+  a.hand = [c.id];
+  const r = playEffectCard(st, a.id, c.id);
+  assert.equal(r.ok, true, `应能打出：${r.reason}`);
+  assert.equal(a.flags['discardIfNoAction'], 1, `flag 应为 1，实际 ${a.flags['discardIfNoAction']}`);
+});
+
+check('a121：到站无牌可打时给出"弃牌换新牌"选项，且手牌回到 6 张', () => {
+  const { st, a, map } = setup();
+  const c = CARD_BY_NAME['a121']!;
+  a.cellId = map.cells.find((x) => x.cellTypeId === c.cellTypeId)!.id;
+  a.hand = [c.id];
+  playEffectCard(st, a.id, c.id);
+
+  a.movedThisTurn = true;
+  // 手里全是打不出的牌（不在当前格子的类型上）
+  const poor = ACTION_CARDS.filter((x) => !x.specialMove && x.cellTypeId !== c.cellTypeId)
+    .slice(0, 3).map((x) => x.id);
+  a.hand = poor;
+
+  const opts = availableOptions(st, a.id);
+  const pick = opts.find((o) => o.id === 'perm.discardToRedraw');
+  assert.ok(pick, `应给出该选项，实际选项：${opts.map((o) => o.id).join(', ') || '(无)'}`);
+
+  const r = runOption(st, a.id, 'perm.discardToRedraw');
+  assert.equal(r.ok, true, `执行应成功：${r.error}`);
+  // 弃 1 张（3→2）后补到上限 6 —— `drawTo` 是"再抽 N 张"，别写成交 6
+  assert.equal(a.hand.length, 6, `手牌应回到 6 张，实际 ${a.hand.length}`);
 });
 
 console.log('\n=== 不变量：不再有"效果尚未实现"的动作 ===');

@@ -811,6 +811,20 @@ export function playEffectCard(
     p.permanents.push(cardId);
     // 数值型 Perm_* 在打出时立即落地；触发型留给 fireTrigger
     applyImmediatePermanents(state, p, cardId);
+    // ── a121「机械帮手」：把"到站无牌可打时可弃牌"记在**持有者**身上 ──
+    //
+    // ⚠️ `PERM_SPECS.Perm_Discard` 挂的是 `ownTurnEnd` 事件，但 `handleFlag`
+    // 原先落 `default: return false` —— flag 永远不会被写到玩家身上，
+    // 于是这张 700 金的永久卡完全没作用。
+    // 这里在**打出时**就把 flag 落到持有者（它是持久的，不是一次性触发）。
+    if (card.actions.some((a) => String(a.type) === 'Perm_Discard')) {
+      const n = card.actions
+        .filter((a) => String(a.type) === 'Perm_Discard')
+        .map((a) => Number((a.params ?? []).find((x) => /^\d+$/.test(x)) ?? 1))
+        .find((v) => v > 0) ?? 1;
+      p.flags['discardIfNoAction'] = n;
+      pushLog(state, p.id, `永久卡「${card.text.name}」：到站无牌可打时可弃 ${n} 张手牌`);
+    }
   } else if (card.secret) {
     p.secrets.push(cardId);
     // 秘密卡相关钩子（「秘密社会」+选票、「秘密警察」向他人收费）

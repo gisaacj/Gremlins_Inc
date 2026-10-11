@@ -220,8 +220,14 @@ export function PlayerList({ game, mySocketId }: { game: SerializedGameState; my
   );
 }
 
-/** 非行动卡（厄运/监狱/暴乱）的简单详情弹窗 */
-function SimpleCardDetail({ cardId, onClose }: { cardId: string; onClose: () => void }) {
+/**
+ * 非行动卡（厄运 / 监狱 / 暴乱）的简单详情弹窗。
+ *
+ * 导出给 `GamePage` 用：抽到监狱牌时要能**点开看**完整规则
+ * （用户反馈："为什么抽到倒爷，没法点击预览呢"）。
+ * `CardDetail` 只认行动卡（`CARD_BY_ID` 里只有行动卡），监狱牌走这里。
+ */
+export function SimpleCardDetail({ cardId, onClose }: { cardId: string; onClose: () => void }) {
   const mf = MISFORTUNE_CARDS.find((c) => c.id === cardId);
   const jc = JAIL_CARDS.find((c) => c.id === cardId);
   const cc = CHAOS_CARDS.find((c) => c.id === cardId);

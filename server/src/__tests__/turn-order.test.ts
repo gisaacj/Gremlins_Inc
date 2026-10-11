@@ -143,9 +143,12 @@ check('建筑可容纳多人 → 不引发交锋', () => {
 console.log('\n=== 第 3 步：看是否有可使用的牌（UseCard） ===');
 
 check('UseCard 阶段排在站点效果之前（此时站点仍未结算）', () => {
+  // ⚠️ 用「办公楼」而不是「收入格」：收入格没有任何可选动作，
+  // 现在引擎对"无事可做"返回 null（自动结束回合），测不到两阶段顺序。
+  // 办公楼有 sellVote，才会真的停在 UseCard 阶段。
   const st = game();
   parkOpponent(st);
-  const { a, target } = armApproach(st, 'Income');
+  const { a, target } = armApproach(st, 'Office');
   const money0 = a.res.money;
   moveWithCard(st, a.id, card1.id, target.id);
 
@@ -159,12 +162,41 @@ check('UseCard 阶段排在站点效果之前（此时站点仍未结算）', ()
 check('无牌可打时自动跳过 UseCard（bug #9）', () => {
   const st = game();
   parkOpponent(st);
-  const { a, target } = armApproach(st, 'Income');
+  const { a, target } = armApproach(st, 'Office');
   a.hand = [card1.id];         // 只有用于移动的那张，打完后手上无效果牌
   moveWithCard(st, a.id, card1.id, target.id);
   const pr = buildEnginePrompt(st, a.id);
   assert.equal(pr!.options?.length ?? 0, 0, '应没有可打的牌');
   assert.equal(pr!.canEndPhase, true, '应允许结束本阶段');
+  // 已经直接落到 UseCell（建筑动作在给），说明 UseCard 被跳过了
+  assert.ok((pr!.optionalActions?.length ?? 0) > 0,
+    '应直接进入 UseCell 并给出建筑动作');
+  console.log(`      直接进入 UseCell，可选动作: ${pr!.optionalActions!.map((o) => o.id).join(', ')}`);
+});
+
+check('无事可做的格子直接返回 null（不该弹"无可用动作，跳过结束回合"）', () => {
+  // 用户实测：走到警察格、没牌可出时仍然弹「无可用动作，跳过结束回合」，
+  // 那一步是多余的 —— 现在这种情况返回 null，由 endTurn 自动交棒。
+  const st = game();
+  parkOpponent(st);
+  const a = getPlayer(st, 'P0')!;
+  const map = getMap(st);
+  const police = map.cells.find((c) => c.cellType === 'Police')!;
+  const prev = map.cells.find((c) => c.out.includes(police.id))!;
+  a.cellId = prev.id;
+  a.hand = [card1.id];
+  moveWithCard(st, a.id, card1.id, police.id);
+  // 警察格本身会挂起（付贿赂/掷骰），先应答掉，回到"没事可做"的状态
+  let guard = 0;
+  while (st.pending && guard++ < 8) {
+    const pend = st.pending;
+    const pick = pend.options.slice(-1).map((o) => o.value);
+    const r = resolvePending(st, pend.playerId, pick);
+    st.pending = r.pending;
+  }
+  const pr = buildEnginePrompt(st, a.id);
+  assert.equal(pr, null, `无事可做时应返回 null，实际 ${JSON.stringify(pr)}`);
+  console.log('      返回 null（调用方会自动结束回合）');
 });
 
 // ─────────────────────────────────────────────────────────────

@@ -301,3 +301,72 @@
   align-items: center;
   justify-content: center;
 }
+
+/* ── 抽监狱牌：把候选项渲染成"卡牌"而不是一行文字按钮 ──
+   用户反馈：抽到「倒爷」看不到牌、也没法点开预览，只能在日志里看。
+   所以每个候选项独立成块，显示**完整规则**，并各给一个「详情」入口。 */
+.jail-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.jail-pick-card {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.jail-pick-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.jail-pick-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-gold);
+  margin-bottom: 3px;
+}
+
+/* 完整规则：允许换行，不省略 */
+.jail-pick-rule {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text);
+  white-space: normal;
+  word-break: break-word;
+}
+
+.jail-pick-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: center;
+}
+
+.jail-pick-actions button { white-space: nowrap; }
+.jail-pick-more { font-size: 12px; padding: 4px 10px; }
+.jail-pick-decline { align-self: center; font-size: 12px; opacity: 0.85; }
+
+
+/* ── 传送类卡牌：地图点选目的地 ──
+   用户要求：不要把所有地点列成一串任选，而应在地图上高亮合法目的地、
+   点击选择、再点确认。这里只放"提示 + 确认"两个元素。 */
+.teleport-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.teleport-hint { font-size: 13px; color: var(--color-text); }
+.teleport-pick button { min-width: 96px; }

@@ -70,6 +70,15 @@ const CARD_ZH_OVERRIDE: Record<string, string> = {
   a182: '选择任意其他玩家：该玩家跳过 1 次走牌。你可以再使用一张卡牌。',
   // params = [1]，actions = Teleport(垃圾场) + AddTurn(1)
   a102: '传送到垃圾场。并额外获得 1 次走牌。',
+  // ⚠️ 这条的中文（来自原版中文包，不是被截断）**漏了后半句**。
+  // 英文原文是两件事：
+  //   ① "Choose any player. They teleport to the Jail (only if you have a
+  //      current jail term) and serve your term." → 让**对手**替你坐牢
+  //   ② "Teleport to the Court."                    → **你自己**去法院
+  // 中文只写了 ①。而动作参数指向的是**法院**（D6534DE007B18E10）——
+  // 只看中文会以为这张牌把自己送进监狱，与实现不符。这里补齐 ②。
+  a103: '选择任意玩家：该玩家瞬移到监狱并替你服刑（仅当你正在服刑时有效）。'
+    + '随后你传送到法院。',
   // params = [1]，actions = Perm_AstralElevator(1) + MOVE + OpponentSkipTurn(1)
   a123: '你可以直接从银行移动到天界。'
     + '【移动时】以此卡牌移动时：跳过 1 次走牌。',

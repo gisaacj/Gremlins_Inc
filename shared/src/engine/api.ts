@@ -650,6 +650,9 @@ export function nextTurn(state: EngineState): { ok: boolean; error?: string; gam
     return { ok: false, error: '站点效果待结算', gameOver: false };
   }
 
+  // `endTurn` 内部会自动跳过"没有任何可操作步骤"的下一位玩家
+  // （见 state.ts 末尾 —— 那里能同时拿到 availableOptions 与 playableCards，
+  //  而 api.ts 不能反向 import serialize.ts，会形成循环依赖）。
   endTurn(state);
   return { ok: true, gameOver: state.phase === 'game_over' };
 }

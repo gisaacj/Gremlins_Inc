@@ -341,3 +341,11 @@
   button { min-height: 38px; }
   input, select { min-height: 38px; font-size: 16px; }
 }
+
+/* 抽监狱牌：手机上按钮横排、卡牌块占满宽度 */
+@media (max-width: 900px) {
+  .jail-pick-card { flex-direction: column; }
+  .jail-pick-actions { flex-direction: row; justify-content: flex-end; }
+  .jail-pick-actions button { min-height: 40px; }
+  .jail-pick-list { max-height: 52vh; }
+}

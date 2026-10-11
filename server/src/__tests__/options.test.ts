@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import type { EnginePlayer, EngineState } from '@gremlins/shared/engine';
 import {
-  CHARACTERS, availableOptions, createState, doOption, endTurn, getCell, getMap,
+  CHARACTERS, availableOptions, createState, doOption, endTurn, finishTurnActions, getCell, getMap,
 } from '@gremlins/shared/engine';
 
 
@@ -268,13 +268,38 @@ check('重复调 endTurn 最多几步就会换人（循环护栏）', () => {
   while (s.currentIndex === before && steps < 6) { endTurn(s); steps++; }
   assert.ok(steps <= 3, `应在少数几步内换人，实际 ${steps} 步`);
 });
-check('「保险优惠」把冒险格保险价从 40 降到 10', () => {
+check('「保险优惠」把冒险格保险价从 40 降到 10（走落地弹窗）', () => {
+  // ⚠️ 这条原先断言 `availableOptions` 里有个 `danger.insure` 可选动作，
+  // 但那个选项**在 doOption 里没有处理分支**（幽灵选项：点了没反应、
+  // 回合也不推进，于是面板反复弹出 —— 用户实测"点了四次不买或跳过"）。
+  // 现已移除，冒险格的保险改由**落地强制弹窗**（kind = `danger:<id>`）处理，
+  // 所以这里改测真实路径。
   const s = game(['Collector', 'Engineer']);
   const p = byChar(s, 'Collector');
   putAt(s, p, 'Danger');
-  const o = availableOptions(s, p.id).find((x) => x.id === 'danger.insure')!;
-  assert.ok(o.label.includes('10'), `保险价应为 10：${o.label}`);
-  console.log(`      ${o.label}`);
+
+  // 1) 幽灵选项不该再出现
+  assert.equal(
+    availableOptions(s, p.id).find((x) => x.id === 'danger.insure'),
+    undefined,
+    'danger.insure 是没有处理分支的幽灵选项，不该再出现在可选动作里',
+  );
+
+  // 2) 真实入口：落地效果挂起，提示里的价格应为 10（收藏家有「财产保险」）
+  s.pendingCellEffect = { playerId: p.id, cellId: p.cellId };
+  const pend = finishTurnActions(s);
+  assert.ok(pend, '冒险格落地应挂起一个决策');
+  assert.ok(pend!.prompt.includes('10'), `保险价应为 10：${pend!.prompt}`);
+  console.log(`      ${pend!.prompt}`);
+
+  // 3) 对照：普通角色是 40
+  const s2 = game(['Banker', 'Engineer']);
+  const p2 = byChar(s2, 'Banker');
+  putAt(s2, p2, 'Danger');
+  s2.pendingCellEffect = { playerId: p2.id, cellId: p2.cellId };
+  const pend2 = finishTurnActions(s2);
+  assert.ok(pend2!.prompt.includes('40'), `普通角色保险价应为 40：${pend2!.prompt}`);
+  console.log(`      （对照）${pend2!.prompt}`);
 });
 check('「天界俱乐部」选票达标时给出直达天界', () => {
   const s = game(['Politician', 'Engineer']);

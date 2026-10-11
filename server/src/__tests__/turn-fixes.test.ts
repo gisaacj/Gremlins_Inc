@@ -91,14 +91,27 @@ for (const cellType of ['Income', 'Bribe', 'Inferno']) {
   });
 }
 
-check('地狱格扣 100 金钱（bug #6 的具体表现）', () => {
+check('地狱格：弃光手牌 + 重抽，并 +100 金钱、+1 罪恶', () => {
+  // 权威文案（English.txt，Inferno 的 DescriptionID 16771329641746116856）：
+  //   "Discard your hand. +{1}$, +{2}^."    params = [100, 1]
+  // ⚠️ 早先引擎实现成"付 100 金钱抽 1 张牌"，与数据完全相反，这条断言也跟着错了。
+  // 现在按数据来：是**获得** 100 金钱，不是支付。
   const st = game();
   if (!landOn(st, 'Inferno', card1.id)) { console.log('      （走不到地狱，跳过）'); return; }
   const a = getPlayer(st, 'P0')!;
-  const before = a.res.money;
+  const handBefore = [...a.hand];
+  const money0 = a.res.money;
+  const malice0 = a.res.malice;
   nextTurn(st);
-  assert.equal(before - a.res.money, 100, `应扣 100，实际扣 ${before - a.res.money}`);
-  console.log(`      ${before} → ${a.res.money}`);
+
+  assert.equal(a.res.money - money0, 100, `应 +100 金钱，实际 ${a.res.money - money0}`);
+  assert.equal(a.res.malice - malice0, 1, `应 +1 罪恶，实际 ${a.res.malice - malice0}`);
+  // 手牌应被弃光后重抽（旧牌一张都不该留下）
+  const kept = a.hand.filter((c) => handBefore.includes(c)).length;
+  assert.equal(kept, 0, `旧手牌应被全部弃掉，还剩 ${kept} 张`);
+  assert.ok(a.hand.length > 0, '弃光后应重抽满手牌');
+  console.log(`      金钱 ${money0} → ${a.res.money}，罪恶 ${malice0} → ${a.res.malice}，`
+    + `手牌 ${handBefore.length} 张 → 弃光重抽 ${a.hand.length} 张（沿用旧牌 ${kept} 张）`);
 });
 
 // ─────────────────────────────────────────────────────────────

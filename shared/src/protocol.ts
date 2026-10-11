@@ -228,6 +228,22 @@ export interface PlayerPrompt {
   options?: string[];
   /** 通用选项：value 回传给 `game:choose` */
   choices?: Array<{ value: string; label: string }>;
+  /**
+   * `choices` 里哪些是**卡牌 id**（目前只有"抽监狱牌"用到）。
+   *
+   * 抽到监狱牌时界面要把它渲染成**卡牌**并支持点开看完整规则；
+   * 光靠 `choices[].value` 分不清"卡牌 id"和 `jailDecline` 这类控制值
+   * （用户反馈：抽到「倒爷」看不到牌、也没法点击预览）。
+   */
+  cardIds?: string[];
+  /**
+   * `choices` 里哪些是**棋盘地点 id**（传送类卡牌用）。
+   *
+   * 用户要求：传送应该是"在地图上高亮合法目的地 → 点击 → 确认"，
+   * 而不是把所有地点列成一串文字任选。界面拿到这组 id 就能在棋盘上
+   * 高亮它们（复用移动预览的高亮/点击逻辑）。
+   */
+  placeOptions?: string[];
   /** 可选目标玩家 */
   targetOptions?: string[];
   /** 可选厄运牌 id 列表（两害取其轻） */

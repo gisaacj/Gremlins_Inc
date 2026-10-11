@@ -1168,7 +1168,21 @@ function doneWithConflict(
 ): { ok: boolean; pending?: PendingChoice } {
   if (effectPending) return { ok: true, pending: effectPending };
   const conflict = resumeLandingAfterCellEffect(state, actor);
-  return conflict ? { ok: true, pending: conflict } : { ok: true };
+  if (conflict) return { ok: true, pending: conflict };
+
+  // ── 格子效果问完了，而且没有引发交锋 → 这个回合就该结束了 ──
+  //
+  // ⚠️ 这里以前直接 `return { ok: true }`，**没有推进回合**。
+  // 而 `endTurn` 的"有可选动作就先停一下"那道逻辑只在
+  // `nextTurn → endTurn` 这条路上跑过，买保险／付贿赂这些
+  // **格子效果挂起**的路径完全绕开了它 —— 于是玩家答完保险问询后，
+  // 界面又看到"该格可用动作"面板，点跳过又回到原地。
+  // 用户实测："我总共点了四次不买或跳过，离谱"。
+  //
+  // 现在明确收尾：答完格子效果就交棒。
+  // （`skipPlay` → `nextTurn` 那条路不会走到这里，它自己会调 `endTurn`。）
+  endTurn(state);
+  return { ok: true };
 }
 
 /**
@@ -1355,16 +1369,34 @@ function resolveCellEffect(
     // Tribune（演讲格）是 OptionalFlag=true，只有可选动作给选票，不停留不自动给
     // 地狱：OptionalFlag=false，停留时自动扣 100 金钱抽 1 张牌
     case 'Inferno': {
-       const cost = cellType.params[0] ?? 100;
-       if (p.res.money >= cost) {
-         addRes(p, 'money', -cost);
-         drawTo(state, p, 1);
-         pushLog(state, p.id, `地狱：付 ${cost} 金钱，抽 1 张牌`);
-       } else {
-         pushLog(state, p.id, `地狱：金钱不足 ${cost}，无效果`);
-       }
-       break;
-     }
+      // 地狱格：**弃掉全部手牌**，然后 +{1}$ / +{2}^。
+      //
+      // 权威文案（`English.txt`，DescriptionID 16771329641746116856）：
+      //   "Discard your hand. +{1}$, +{2}^."
+      // 中文包同样只保留了第一句「丢弃手牌。」
+      // `params = [100, 1]` → +100 金钱、+1 罪恶（是**获得**，不是支付）。
+      //
+      // ⚠️ 早先这里实现成"付 100 金钱抽 1 张牌"，与数据完全相反
+      // （用户报：地狱的效果应该是弃掉所有手牌再抽满）。
+      const gainMoney = cellType.params[0] ?? 100;
+      const gainMalice = cellType.params[1] ?? 1;
+      const discarded = p.hand.length;
+      for (const id of p.hand) state.discard.push(id);
+      p.hand = [];
+      addRes(p, 'money', gainMoney);
+      addRes(p, 'malice', gainMalice);
+      // 手牌补满（原版手牌恒为 HAND_SIZE，弃光后立刻重抽）
+      let drawn = 0;
+      while (p.hand.length < HAND_SIZE) {
+        const before = p.hand.length;
+        drawTo(state, p, 1);
+        if (p.hand.length === before) break;
+        drawn++;
+      }
+      pushLog(state, p.id,
+        `地狱：弃掉 ${discarded} 张手牌，重抽 ${drawn} 张，+${gainMoney} 金钱、+${gainMalice} 罪恶`);
+      break;
+    }
     default:
       break;
   }
@@ -2171,6 +2203,28 @@ function applyBundle(
 }
 
 // ---------------------------------------------------------------- 回合推进
+/**
+ * 当前玩家是否**完全无事可做**（可以自动跳过他的回合）。
+ *
+ * 用户要求：走到警察格、没牌可出时不该弹「无可用动作，跳过结束回合」，
+ * 应该直接进下一阶段。判据就是"没牌可打 且 没有任何站点/能力动作"。
+ *
+ * 与 `buildEnginePrompt` 里 UseCell 阶段返回 null 的条件一致
+ * （那边是 `playableCards` 与 `availableOptions` 同时为空）。
+ * 放在这里而不是 `serialize.ts`，是为了让 `endTurn` 能直接调用，
+ * 同时避免 `api.ts → serialize.ts → api.ts` 的循环依赖。
+ */
+function hasNothingToDo(state: EngineState, p: EnginePlayer): boolean {
+  if (state.pending) return false;
+  // 还没走牌 → 起码还要选一张移动牌，不能跳
+  if (!p.movedThisTurn) return false;
+  // 还能打牌 → 有事可做
+  if (p.hand.some((id) => canPlayCard(state, p, id).ok)) return false;
+  // 有站点 / 建筑 / 角色能力动作 → 有事可做
+  if (availableOptions(state, p.id).length > 0) return false;
+  return true;
+}
+
 /** 结束当前玩家回合，交给下一位 */
 export function endTurn(state: EngineState): void {
   const p = actorOf(state);
@@ -2226,30 +2280,54 @@ export function endTurn(state: EngineState): void {
     guard++;
   } while (state.players[state.currentIndex]?.skipTurns > 0 && guard < state.players.length * 4);
 
-  // 新回合开始钩子（信用贷扣款、服刑津贴、角色「平民主义」等）
-  const next = actorOf(state);
-  if (next) {
-    fireTrigger(state, 'ownTurnStart', { actorId: next.id });
-    fireAbility(state, next.id, 'turnStart', { cellId: next.cellId });
+  // ── 自动跳过"完全没有可操作步骤"的玩家 ──
+  //
+  // 用户要求：没牌可出、也没站点动作时不该弹「无可用动作，跳过结束回合」，
+  // 应直接跳过这一阶段/这一位玩家。这里顺着往下走，直到轮到一位
+  // **真的有事可做**的玩家（或对局结束）。
+  //
+  // 每一位都要走完整的"回合开始钩子"，不能简单地把 currentIndex 往后拨 ——
+  // 否则被跳过的人会漏掉 turnStart 触发（信用贷扣款、服刑津贴等）。
+  // 所以用 goto 式的循环：轮转 → 跑钩子 → 检查 → 需要则再轮转。
+  let autoGuard = state.players.length * 2 + 4;
+  for (;;) {
+    const nxt = actorOf(state);
+    if (!nxt) break;
+
+    // 新回合开始钩子（信用贷扣款、服刑津贴、角色「平民主义」等）
+    fireTrigger(state, 'ownTurnStart', { actorId: nxt.id });
+    fireAbility(state, nxt.id, 'turnStart', { cellId: nxt.cellId });
+
+    if (nxt.skipTurns > 0) {
+      nxt.skipTurns -= 1;
+      pushLog(state, nxt.id, `跳过本次走牌（剩余 ${nxt.skipTurns}）`);
+    }
+
+    // 每轮结束钩子（「古代机构」+齿轮、「末日时钟」每 6 轮扣分等）
+    if (state.currentIndex === 0) {
+      fireTrigger(state, 'roundEnd', {});
+      // 混沌卡已打完 → 在本轮结束处收尾（原版规则）
+      finishRoundIfChaosDone(state);
+    }
+
+    // 选举检查
+    if (state.round >= state.nextElectionRound) runElection(state);
+
+    // 胜利检查
+    checkVictory(state);
+
+    // 对局结束、或被挂起的决策打断 → 停
+    if (state.phase !== 'playing' || state.pending) break;
+
+    // 这位玩家有事可做 → 就交给他
+    if (!hasNothingToDo(state, nxt)) break;
+
+    // 完全无事可做 → 记一条日志并继续轮转（跳过他的回合）
+    if (autoGuard-- <= 0) break;      // 兜底：避免极端情况下的死循环
+    pushLog(state, nxt.id, '无事可做，自动跳过');
+    state.currentIndex = (state.currentIndex + 1) % state.players.length;
+    if (state.currentIndex === 0) state.round += 1;
   }
-
-  if (next && next.skipTurns > 0) {
-    next.skipTurns -= 1;
-    pushLog(state, next.id, `跳过本次走牌（剩余 ${next.skipTurns}）`);
-  }
-
-  // 每轮结束钩子（「古代机构」+齿轮、「末日时钟」每 6 轮扣分等）
-  if (state.currentIndex === 0) {
-    fireTrigger(state, 'roundEnd', {});
-    // 混沌卡已打完 → 在本轮结束处收尾（原版规则）
-    finishRoundIfChaosDone(state);
-  }
-
-  // 选举检查
-  if (state.round >= state.nextElectionRound) runElection(state);
-
-  // 胜利检查
-  checkVictory(state);
 
   // 换人本身就是一次状态推进 —— 必须让进度计数前进，
   // 否则 AI 的防卡死保险会把"成功换人"误判成"什么都没变"。

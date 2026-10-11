@@ -219,9 +219,13 @@ function cellOptions(state: EngineState, p: EnginePlayer): OptionSpec[] {
 
   if (def?.optional) {
     out.push(...stationOptions(state, p, cell.cellType, pr, def.text.description));
-  } else if (cell.cellType === 'Danger' || cell.cellType === 'Treasure') {
-    // 冒险格与藏宝阁的掷骰原版是"必掷"，但**掷不掷**仍由玩家决定，
+  } else if (cell.cellType === 'Treasure') {
+    // 藏宝阁的掷骰原版是"必掷"，但**掷不掷**仍由玩家决定，
     // 所以即使 OptionalFlag=false 也要给出这个选项。
+    //
+    // 冒险格（Danger）不在这里 —— 它走落地强制弹窗（见下）。早先它被一起
+    // 放进来，产出一个**没有处理分支的幽灵选项** `danger.insure`，
+    // 点下去什么都不发生、回合也推进不了，于是面板反复弹出（用户 bug）。
     out.push(...stationOptions(state, p, cell.cellType, pr, def?.text.description ?? ''));
   }
 
@@ -373,19 +377,19 @@ function stationOptions(
       break;
     }
 
-    // 冒险格：买保险（基础 40；收藏家「财产保险」优惠→10）
-    case 'Danger': {
-      // 与 resolveCellEffect 共用同一算法，避免两处不一致
-      const cost = insuranceCost(p);
-      out.push({
-        id: 'danger.insure',
-        label: `买保险 ${cost} 金`,
-        description,
-        affordable: p.res.money >= cost,
-        reason: p.res.money >= cost ? undefined : `需要 ${cost} 金钱`,
-      });
+    // 冒险格：**不在这里给可选动作**。
+    //
+    // ⚠️ 这里原先给了一个 `danger.insure`（"买保险 N 金"），但 `doOption`
+    // 里**根本没有它的处理分支** —— 是个幽灵选项：点下去什么都不发生，
+    // 回合也推进不了，于是 UseCell 面板反复弹出来。
+    // 用户实测："我总共点了四次不买或跳过，离谱"。
+    //
+    // 冒险格的买保险本来就走**落地强制弹窗**
+    // （`resolveCellEffect` 的 `case 'Danger'`，pending kind = `danger:<id>`），
+    // 那里才是唯一入口。所以直接不给可选动作。
+    // 藏宝阁（Treasure）同理 —— 它也是落地自动掷骰，没有可选动作。
+    case 'Danger':
       break;
-    }
 
     // 风险格（赌博站）：可选掷骰试手气
     case 'Risk': {

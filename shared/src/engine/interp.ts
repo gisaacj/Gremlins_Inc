@@ -785,7 +785,11 @@ function execAction(
     }
 
     case 'OpponentTeleport': {
-      const dest = firstId(slots) ?? ctx.scratch?.placeId;
+      // 参数是**格子类型 id**，必须先解析成真实格 id（见 teleportTargetCells）。
+      // 原先直接 firstId(slots) 当格 id 用，会把位置写成类型 key。
+      const rawParams = slots.map((s) => String(s.value)).filter(Boolean);
+      const targets = teleportTargetCells(state, rawParams);
+      const dest = targets[0]?.id ?? ctx.scratch?.placeId;
       if (!dest) return undefined;
       for (const tgt of targetPlayers(state, ctx)) {
         tgt.cellId = dest;
@@ -1397,12 +1401,19 @@ function handleSelect(
         }
         return undefined;
       }
-      // params 可能是 cellType ID（十六进制），需要转换后查格子
+      // params 可能是 cellType ID（十六进制），需要转换后查格子。
+      //
+      // ⚠️ 这里原先写成 `if (cellTypeIds.length > 0 && !pre)` ——
+      // 只在**首次**通过时按类型过滤，**重放**（`pre` 已存在）时整个跳过，
+      // 直接落到下面"列出地图上所有格子"的兜底分支。
+      // 于是 a024「翻筋斗」（参数=赌博站点的 cellTypeId）会给出**全部 67 格**，
+      // 连收入格都能传送 —— 用户报的正是这个。
+      // 现在不区分首次/重放：过滤后若只剩 1 格就直接用（重放路径）。
       const cellTypeIds = slots
         .filter((s) => s.kind === 'id')
         .map((s) => s.value)
         .filter(Boolean);
-      if (cellTypeIds.length > 0 && !pre) {
+      if (cellTypeIds.length > 0) {
         // 把 hex cellType ID 转成 decimal，找棋盘上对应类型的格子
         const destCells: { id: string; label: string }[] = [];
         for (const hex of cellTypeIds) {
@@ -1419,9 +1430,19 @@ function handleSelect(
           return undefined;
         }
         if (destCells.length > 1) {
-          return makePending(ctx, kind, '选择传送目的地',
+          // 重放时玩家已选好 → 直接用他选的那一格（并校验它合法）
+          if (pre && destCells.some((d) => d.id === pre[0])) {
+            o.cellId = pre[0]!;
+            log(state, o.id, `传送到 ${cellLabel(getCell(state, pre[0]!))}`);
+            return undefined;
+          }
+          return makePending(ctx, kind, `选择传送目的地（${ctx.source}）`,
             destCells.map((d) => ({ value: d.id, label: d.label })));
         }
+        // 参数给了类型但**棋盘上没有这种格子** → 不能退化成"任意地点"。
+        // 宁可原地不动并写日志，也不要给出非法目的地。
+        log(state, o.id, `传送到指定地点（棋盘上无此类格子，原地不动）`);
+        return undefined;
       }
       const dest = firstId(slots) ?? ctx.scratch?.placeId;
       if (dest) {
@@ -1445,6 +1466,38 @@ function handleSelect(
       return undefined;
     }
   }
+}
+
+/**
+ * 解析"传送目的地"参数 → 棋盘上的候选格子。
+ *
+ * ⚠️ 这是**唯一**该做这件事的地方。原实现有两份：
+ *  - `handleSelect` 的 `Teleport` 分支（过滤后给出候选，正确）
+ *  - `runPrimitive` 的 `OpponentTeleport` 分支（直接 `firstId(slots)` 当格 id 用，**错**）
+ *
+ * 而卡牌参数里存的是**格子类型 id**（形如 `D6534DE007B18E10`，是 cellType 的
+ * hex），**不是**格 id。于是 `OpponentTeleport` 会把玩家的位置写成那个 key ——
+ * 一个不存在的"格子"，后续所有 `getCell` 都失败。
+ * 实测 a163「审判日」把对手传送到办公室 key `D6534DE007B18E10`（用户可见的位置异常）。
+ *
+ * @returns 候选格列表（0 个表示参数不是格子类型 id，或棋盘上没这种格子）
+ */
+export function teleportTargetCells(state: EngineState, params: string[]): { id: string; label: string }[] {
+  const out: { id: string; label: string }[] = [];
+  for (const raw of params) {
+    // 语义标记（All / Card / Opponent）不是格子类型 id，交给调用方另行处理
+    if (/^(All|Card|Opponent)$/i.test(raw)) continue;
+    let dec = raw;
+    if (!/^\d+$/.test(raw)) {
+      try { dec = BigInt('0x' + raw).toString(); } catch { continue; }
+    }
+    for (const cell of getMap(state).cells) {
+      if (String(cell.cellTypeId) === dec || cell.id === raw) {
+        out.push({ id: cell.id, label: cellLabel(cell) });
+      }
+    }
+  }
+  return out;
 }
 
 /** 所有建筑格 id */

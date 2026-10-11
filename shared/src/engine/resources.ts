@@ -96,9 +96,24 @@ const RESOURCE_ALIASES: Record<string, ResourceKey> = {
   term: 'term', jail: 'term',
 };
 
-/** UIN 形态的十进制大整数串 —— 用于区分"文本/对象 id"与普通数值 */
+/**
+ * UIN 形态的 id 串。
+ *
+ * ⚠️ 原版 `ActionParams` 里的 UIN **两种进制都有**：
+ *  - 十进制（`AsString` 序列化后的形态）：`14458891128750972929`
+ *  - **十六进制**（dnSpy 里直接看到的形态）：`E1D14CE007F0D903`
+ *
+ * 早先这里只认十进制 `/^\d{8,}$/`，于是十六进制的那些被当成**普通文本**
+ * 落进 `tag` 槽位。而 `Teleport` 是按 `slots.filter(kind === 'id')` 取
+ * 目的地 cellTypeId 的 —— 取不到就退化到"列出地图上所有格子"，
+ * 于是 a024「翻筋斗」能传送到收入格等任意地点（用户报的 bug）。
+ *
+ * 判据：8 位以上、只含 0-9A-Fa-f。刻意要求**至少 8 位**，
+ * 避免把 `"All"` / `"Card"` / `"Opponent"` 这类语义标记误判成 id
+ * （它们也是纯字母，但短）。
+ */
 function looksLikeUin(s: string): boolean {
-  return /^\d{8,}$/.test(s);
+  return /^(\d{8,}|[0-9A-Fa-f]{8,})$/.test(s);
 }
 
 /** 把单个 ActionParams 条目解析成语义槽位 */

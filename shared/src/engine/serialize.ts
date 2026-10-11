@@ -13,7 +13,25 @@ import { CHAOS_CARDS, cellLabel, getCell, getMap } from './model.js';
 import { getPlayer } from './model.js';
 import { availableOptions } from './options.js';
 import { chaosOptions, playableCards } from './api.js';
-import { conflictBidMax } from './state.js';
+import { JAIL_PICK_KIND, conflictBidMax } from './state.js';
+
+/**
+ * 抽出"抽监狱牌"挂起里的候选项 id。
+ *
+ * 候选存在 `state.pendingInput[JAIL_PICK_KIND]`（JSON 字符串）里，
+ * 由 `takeJailTurn` 写入。界面拿到这些 id 才能把候选项渲染成卡牌、
+ * 并支持点开看完整规则（用户反馈监狱卡看不到、没法预览）。
+ */
+function jailCandidateIds(state: EngineState): string[] {
+  const raw = state.pendingInput?.[JAIL_PICK_KIND];
+  if (!raw) return [];
+  try {
+    const list = JSON.parse(raw) as Array<{ cardId?: string }>;
+    return Array.isArray(list) ? list.map((c) => c.cardId).filter((x): x is string => !!x) : [];
+  } catch {
+    return [];
+  }
+}
 
 /** 引擎回合阶段 → 协议字符串（客户端主要用 prompt，这里只作展示与调试） */
 function phaseOf(state: EngineState): string {
@@ -151,6 +169,9 @@ export function buildEnginePrompt(
         type: 'choose',
         message: pend.prompt,
         choices: pend.options,
+        // 抽监狱牌时把候选项的 id 也带上，界面才能渲染成卡牌并支持点开预览
+        // （否则只能显示成一串文字按钮，用户没法看牌）。
+        cardIds: pend.kind === JAIL_PICK_KIND ? jailCandidateIds(state) : undefined,
         numeric: { min: 0, max: cap, step: 1, unit: '金钱' },
       };
     }
@@ -158,6 +179,9 @@ export function buildEnginePrompt(
       type: 'choose',
       message: pend.prompt,
       choices: pend.options,
+      cardIds: pend.kind === JAIL_PICK_KIND ? jailCandidateIds(state) : undefined,
+      // 传送类卡牌：把目的地作为**棋盘坐标**给出，界面在地图上高亮它们
+      placeOptions: pend.kind === 'Teleport' ? pend.options.map((o) => o.value) : undefined,
     };
   }
 
@@ -207,11 +231,16 @@ export function buildEnginePrompt(
     }
 
     // === UseCell 阶段：可用建筑动作或跳过（无卡牌）===
+    //
+    // 用户要求（bug #9 的补全）：这一阶段**没有任何可用动作时也不该弹窗**。
+    // 原先无条件返回 `play_card_or_skip`，于是走到警察格、没牌可出时会
+    // 弹「无可用动作，跳过结束回合」—— 那一步是多余的。
+    // 现在没有可做动作就返回 null，由调用方自动结束回合。
+    if (optional.length === 0) return null;
+
     return {
       type: 'play_card_or_skip',
-      message: optional.length
-        ? `「${place}」可用动作，或跳过结束回合`
-        : `无可用动作，跳过结束回合`,
+      message: `「${place}」可用动作，或跳过结束回合`,
       options: [],
       optionalActions: optional.map((o) => ({
         id: o.id,

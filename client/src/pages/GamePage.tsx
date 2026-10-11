@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 import { useIsMobile } from '../hooks/useMediaQuery.js';
 import { useGameStore } from '../store/game.js';
 import { BoardView } from '../components/BoardView.js';
-import { ResourcePanel, PlayerList, LogBox, PermanentPanel } from '../components/Hud.js';
+import { ResourcePanel, PlayerList, LogBox, PermanentPanel, SimpleCardDetail } from '../components/Hud.js';
 import { Card, CardDetail } from '../components/Card.js';
-import { CARD_BY_ID, CHAOS_CARDS, displayCardRules } from '@gremlins/shared';
+import { BOARD_VIEW, CARD_BY_ID, CHAOS_CARDS, JAIL_CARDS, displayCardRules, getBoardView } from '@gremlins/shared';
 import type { ActionCard } from '@gremlins/shared';
 import '../styles/game.css';
 import '../styles/cards.css';
@@ -79,6 +79,8 @@ export function GamePage() {
   // 否则棋盘被挤到只剩几十像素（用户反馈"适配不好、信息被遮挡"）。
   const isMobile = useIsMobile();
   const [drawer, setDrawer] = useState<null | 'info' | 'chaos'>(null);
+  // 传送类卡牌选中的目的地（在地图上点选，再点"确认传送"）
+  const [teleportDest, setTeleportDest] = useState<string | null>(null);
   // 切到窄屏时收起浮层，避免残留
   useEffect(() => {
     if (!isMobile) setDrawer(null);
@@ -219,15 +221,17 @@ export function GamePage() {
             players={game.players}
             myPlayer={myPlayer}
             mapId={game.mapId}
-            moveDestTiles={movePreview?.destinations}
-            selectedDestTile={movePreview?.selectedDest ?? undefined}
+            moveDestTiles={movePreview?.destinations ?? prompt?.placeOptions}
+            selectedDestTile={movePreview?.selectedDest ?? teleportDest ?? undefined}
             pathTiles={
               movePreview && movePreview.selectedDest != null
                 ? movePreview.destPaths.get(movePreview.selectedDest)
                 : undefined
             }
             onTileClick={(tileId) => {
-              if (movePreview) selectMoveDest(tileId);
+              if (movePreview) { selectMoveDest(tileId); return; }
+              // 传送类卡牌：点地图选目的地（只接受服务端给的合法目的地）
+              if (prompt?.placeOptions?.includes(tileId)) setTeleportDest(tileId);
             }}
           />
 
@@ -253,20 +257,83 @@ export function GamePage() {
               {/* 挂起决策：选对手/选地点/选方向… */}
               {prompt.type === 'choose' && (
                 <div className="choice-list">
-                  {/* 数值输入（交锋出价）：原版是自己填金额，不是从档位里挑 */}
-                  {prompt.numeric && (
-                    <NumericBid
-                      min={prompt.numeric.min}
-                      max={prompt.numeric.max}
-                      unit={prompt.numeric.unit ?? ''}
-                      onSubmit={(v) => choose(prompt.type, [String(v)])}
-                    />
+                  {/* ── 抽监狱牌：单独渲染成"卡牌"而不是一行按钮 ──
+                      用户反馈：抽到「倒爷」看不到牌、也没法点开预览，
+                      只能在日志里看。这里列出候选卡的**完整规则**，
+                      并支持点「详情」看大图；选中即服刑。
+                      （`jailPick` 的 kind 在 choices 里以 cardId 为 value） */}
+                  {isTeleportPick(prompt) ? (
+                    // ── 传送类卡牌：在地图上点选目的地 ──
+                    // 用户要求：不要把"所有地点"列成一串任选，应该
+                    // **在棋盘上高亮合法目的地 → 点击 → 确认传送**。
+                    // 合法目的地由服务端给出（`placeOptions`），
+                    // 所以点地图上的非高亮格不会生效。
+                    <div className="teleport-pick">
+                      <span className="teleport-hint">
+                        {teleportDest
+                          ? `已选：${tileLabel(teleportDest)}`
+                          : '请在地图上点击高亮的地点'}
+                      </span>
+                      <button
+                        className="primary"
+                        disabled={!teleportDest}
+                        onClick={() => {
+                          const d = teleportDest;
+                          setTeleportDest(null);
+                          choose(prompt.type, [d!]);
+                        }}
+                      >
+                        确认传送
+                      </button>
+                    </div>
+                  ) : isJailPick(prompt) ? (
+                    <div className="jail-pick-list">
+                      {jailCandidates(prompt).map((c) => (
+                        <div key={c.id} className="jail-pick-card">
+                          <div className="jail-pick-main">
+                            <div className="jail-pick-name">{c.name}</div>
+                            <div className="jail-pick-rule">{c.rule}</div>
+                          </div>
+                          <div className="jail-pick-actions">
+                            <button className="jail-pick-more" onClick={() => setCardDetail(c.id)}>
+                              详情
+                            </button>
+                            <button
+                              className="primary"
+                              onClick={() => choose(prompt.type, [c.id])}
+                            >
+                              选这张
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      {prompt.choices?.find((c) => c.value === 'jailDecline') && (
+                        <button
+                          className="jail-pick-decline"
+                          onClick={() => choose(prompt.type, ['jailDecline'])}
+                        >
+                          全部拒绝（刑期 −1，+1 罪恶）
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      {/* 数值输入（交锋出价）：原版是自己填金额，不是从档位里挑 */}
+                      {prompt.numeric && (
+                        <NumericBid
+                          min={prompt.numeric.min}
+                          max={prompt.numeric.max}
+                          unit={prompt.numeric.unit ?? ''}
+                          onSubmit={(v) => choose(prompt.type, [String(v)])}
+                        />
+                      )}
+                      {(prompt.choices ?? []).map((c) => (
+                        <button key={c.value} onClick={() => choose(prompt.type, [c.value])}>
+                          {c.label}
+                        </button>
+                      ))}
+                    </>
                   )}
-                  {(prompt.choices ?? []).map((c) => (
-                    <button key={c.value} onClick={() => choose(prompt.type, [c.value])}>
-                      {c.label}
-                    </button>
-                  ))}
                   {!prompt.choices?.length && !prompt.numeric && (
                     <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>无可用选项</span>
                   )}
@@ -407,29 +474,36 @@ export function GamePage() {
 
       {/* 卡牌详情 */}
       {showCardDetail && (
-        <CardDetail
-          cardId={showCardDetail}
-          onClose={() => setCardDetail(null)}
-          canPlay={
-            isMyTurn &&
-            (prompt?.type === 'play_card_or_skip' || prompt?.type === 'select_move_card') &&
-            playableCardIds.has(showCardDetail)
-          }
-          playLabel={prompt?.type === 'select_move_card' ? '用于移动' : '打出'}
-          requireTarget={prompt?.type === 'play_card_or_skip' && requireTarget(showCardDetail)}
-          targetOptions={game.players
-            .filter((p) => p.id !== selfId)
-            .map((p) => ({ id: p.id, name: p.name }))}
-          onPlay={(targetId) => {
-            const cardId = showCardDetail;
-            setCardDetail(null);
-            if (prompt?.type === 'select_move_card') {
-              startMovePreview(cardId);
-            } else if (prompt?.type === 'play_card_or_skip') {
-              playCard(cardId, targetId);
+        // 行动卡走 CardDetail（能打出）；监狱/厄运/暴乱卡走 SimpleCardDetail。
+        // `CardDetail` 对非行动卡会 return null（CARD_BY_ID 里没有它们），
+        // 于是"抽到倒爷点详情"什么都不显示 —— 用户反馈的正是这个。
+        CARD_BY_ID[showCardDetail] ? (
+          <CardDetail
+            cardId={showCardDetail}
+            onClose={() => setCardDetail(null)}
+            canPlay={
+              isMyTurn &&
+              (prompt?.type === 'play_card_or_skip' || prompt?.type === 'select_move_card') &&
+              playableCardIds.has(showCardDetail)
             }
-          }}
-        />
+            playLabel={prompt?.type === 'select_move_card' ? '用于移动' : '打出'}
+            requireTarget={prompt?.type === 'play_card_or_skip' && requireTarget(showCardDetail)}
+            targetOptions={game.players
+              .filter((p) => p.id !== selfId)
+              .map((p) => ({ id: p.id, name: p.name }))}
+            onPlay={(targetId) => {
+              const cardId = showCardDetail;
+              setCardDetail(null);
+              if (prompt?.type === 'select_move_card') {
+                startMovePreview(cardId);
+              } else if (prompt?.type === 'play_card_or_skip') {
+                playCard(cardId, targetId);
+              }
+            }}
+          />
+        ) : (
+          <SimpleCardDetail cardId={showCardDetail} onClose={() => setCardDetail(null)} />
+        )
       )}
     </div>
   );
@@ -440,4 +514,47 @@ function requireTarget(cardId: string): boolean {
   if (!card) return false;
   const selectors = new Set(['SelectOpponent', 'SelectEvil', 'SelectGovernor']);
   return card.actions.some((a) => selectors.has(a.type));
+}
+
+/** 这个挂起是不是"抽监狱牌，选一张" */
+function isJailPick(prompt: { cardIds?: string[] }): boolean {
+  return (prompt.cardIds?.length ?? 0) > 0;
+}
+
+/**
+ * 这个挂起是不是"选传送目的地"。
+ *
+ * 判据是服务端给的 `placeOptions`（棋盘地点 id 列表）—— 有了它就在
+ * **地图上高亮点选**，而不是把地点列成一串按钮（用户要求）。
+ */
+function isTeleportPick(prompt: { placeOptions?: string[] }): boolean {
+  return (prompt.placeOptions?.length ?? 0) > 0;
+}
+
+/** 棋盘格 id → 可读站名（用于"已选：xxx"提示） */
+function tileLabel(tileId: string): string {
+  const view = getBoardView() ?? BOARD_VIEW;
+  const t = view?.byId?.get(tileId);
+  return t?.label || t?.cellType || tileId;
+}
+
+/**
+ * 把"抽监狱牌"的候选项整理成可渲染的卡牌。
+ *
+ * 为什么不直接用 `prompt.choices`：那些 label 是
+ * `「倒爷」——丢弃1张卡牌。` 这种"名字+规则"拼成的长文本，
+ * 塞进按钮里既看不清也没法点开看详情（用户反馈）。
+ * 这里取卡牌本体的名称与规则，交给卡牌式 UI 渲染。
+ */
+function jailCandidates(prompt: { cardIds?: string[] }): Array<{
+  id: string; name: string; rule: string;
+}> {
+  return (prompt.cardIds ?? []).map((id) => {
+    const c = JAIL_CARDS.find((x) => x.id === id);
+    return {
+      id,
+      name: c?.text.name ?? id,
+      rule: c ? displayCardRules(c) : '',
+    };
+  });
 }
